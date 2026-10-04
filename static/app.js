@@ -1204,7 +1204,7 @@ async function askSeparate(m, after) {
   try { ready = (await api('/api/separate/ready')).ready; } catch { /* server lỗi -> coi như chưa sẵn sàng */ }
   if (!ready) {
     return modal('Tách beat (MR)', `<div>Chưa cài bộ tách giọng hát bằng AI.</div>
-      <div class="dim" style="margin-top:8px">Chạy file <b>setup_mr.bat</b> trong thư mục <b>D:\\Claude-code\\video-editor</b>
+      <div class="dim" style="margin-top:8px">Chạy file <b>setup_mr.bat</b> trong thư mục cài app (cùng chỗ với <b>start.bat</b>)
       (tải khoảng 2,5GB, chỉ làm một lần), rồi thử lại.</div>`);
   }
   modal('Tách beat (MR) bằng AI', `<div>Tách giọng hát khỏi <b>${esc(m.name)}</b> → tạo <b>beat (MR)</b> và file <b>giọng hát</b> riêng.</div>

@@ -39,3 +39,9 @@ Mở <http://127.0.0.1:8765>. Trên Windows có thể bấm đúp `start.bat`.
 
 - Thiết kế cho **một người dùng trên một máy**: máy chủ chỉ nghe `127.0.0.1`, chưa có đăng nhập, mọi dự án dùng chung thư mục `workspace/`. Muốn cho nhiều người dùng qua mạng cần thêm tài khoản, tách dữ liệu theo người dùng, hàng đợi xuất video và giới hạn dung lượng trước.
 - Xem trước không có slow motion mượt (chỉ có ở bản xuất).
+
+## Giấy phép
+
+[MIT](LICENSE) — tự do dùng, sửa, phân phối (kể cả thương mại), chỉ cần giữ thông báo bản quyền.
+Tính năng tách beat dùng [Demucs](https://github.com/facebookresearch/demucs) (MIT); ffmpeg cài riêng theo giấy phép của ffmpeg.
+Người dùng tự chịu trách nhiệm về bản quyền của nội dung (video, bài hát) mà mình chỉnh sửa.

@@ -1,0 +1,13 @@
+# Dữ liệu người dùng: video/ảnh/nhạc đã nhập, bản xuất, dự án đã lưu
+workspace/
+
+# Môi trường AI tách giọng hát (~5GB) — tạo lại bằng setup_mr.bat
+sep-env/
+
+# Thư mục/tệp tạm khi test
+_test/
+static/_t/
+__pycache__/
+*.pyc
+*.log
+.env*

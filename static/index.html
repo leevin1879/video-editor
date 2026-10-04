@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Editor</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">▶ <b>VEdit</b></div>
+  <input id="projName" class="proj-name" spellcheck="false" title="Tên dự án">
+  <div class="top-actions">
+    <button id="btnNew" title="Dự án mới">Mới</button>
+    <button id="btnOpen" title="Mở dự án">Mở</button>
+    <button id="btnSave" title="Lưu (Ctrl+S)">Lưu</button>
+    <span class="sep"></span>
+    <button id="btnMore" title="Thêm">⋯</button>
+    <button id="btnUndo" title="Hoàn tác (Ctrl+Z)">↶</button>
+    <button id="btnRedo" title="Làm lại (Ctrl+Y)">↷</button>
+    <button id="btnExport" class="primary">Xuất video</button>
+  </div>
+</header>
+
+<main class="workspace">
+  <!-- Thư viện -->
+  <aside class="panel left">
+    <div class="tabs">
+      <button class="tab active" data-tab="media">Media</button>
+      <button class="tab" data-tab="text">Văn bản</button>
+      <button class="tab" data-tab="filter">Bộ lọc</button>
+      <button class="sheet-close" title="Đóng">✕</button>
+    </div>
+    <section class="tab-body" id="tab-media">
+      <label class="import-btn">＋ Nhập file
+        <input id="fileInput" type="file" multiple accept="video/*,audio/*,image/*" hidden>
+      </label>
+      <div class="hint">Kéo thả file vào đây hoặc vào cửa sổ. Kéo media xuống timeline.</div>
+      <div id="mediaList" class="media-list"></div>
+    </section>
+    <section class="tab-body hidden" id="tab-text">
+      <div class="text-presets" id="textPresets"></div>
+    </section>
+    <section class="tab-body hidden" id="tab-filter">
+      <div class="hint" style="margin-top:0">Bộ lọc áp cho toàn bộ video (video chính + lớp phủ). Bấm để chọn, xem trước ngay trên khung hình.</div>
+      <div class="field hidden" id="fxIntensityRow"><label>Cường độ<output id="fxIntensityOut">100%</output></label>
+        <input type="range" id="fxIntensity" min="0" max="1" step="0.01" value="1" style="width:100%"></div>
+      <div class="fx-grid" id="filterGrid"></div>
+    </section>
+  </aside>
+
+  <!-- Preview -->
+  <section class="preview-wrap">
+    <div id="stage" class="stage"><canvas id="preview"></canvas></div>
+    <div class="transport">
+      <span id="timeCur" class="time">00:00.00</span>
+      <div class="tbtns">
+        <button id="btnStart" title="Về đầu (Home)">⏮</button>
+        <button id="btnPlay" class="play" title="Phát/Dừng (Space)">▶</button>
+        <button id="btnEnd" title="Về cuối (End)">⏭</button>
+      </div>
+      <span id="timeTotal" class="time dim">00:00.00</span>
+    </div>
+  </section>
+
+  <!-- Thuộc tính -->
+  <aside class="panel right">
+    <div class="panel-title"><span id="propTitle">Dự án</span><button class="sheet-close" title="Đóng">✕</button></div>
+    <div id="props" class="props"></div>
+  </aside>
+</main>
+
+<!-- Timeline -->
+<section class="timeline">
+  <div class="tl-toolbar">
+    <button id="btnSplit" title="Cắt tại đầu phát (S)">✂ Tách</button>
+    <button id="btnDup" title="Nhân bản (Ctrl+D)">⧉ Nhân bản</button>
+    <button id="btnDel" title="Xóa (Delete)">🗑 Xóa</button>
+    <span class="grow"></span>
+    <span class="dim">Zoom</span>
+    <input id="zoom" type="range" min="10" max="400" value="80">
+  </div>
+  <div class="tl-body">
+    <div class="tl-heads">
+      <div class="tl-ruler-head"></div>
+      <div class="tl-head" data-track="text"><span class="tl-name">T Văn bản</span><span class="tl-tg"><button data-toggle-track="hidden"></button></span></div>
+      <div class="tl-head ov" data-track="overlay"><span class="tl-name">▤ Lớp phủ</span><span class="tl-tg"><button data-toggle-track="hidden"></button><button data-toggle-track="muted"></button></span></div>
+      <div class="tl-head main" data-track="main"><span class="tl-name">▣ Video chính</span><span class="tl-tg"><button data-toggle-track="hidden"></button><button data-toggle-track="muted"></button></span></div>
+      <div class="tl-head" data-track="audio"><span class="tl-name">♪ Âm thanh</span><span class="tl-tg"><button data-toggle-track="muted"></button></span></div>
+    </div>
+    <div class="tl-scroll" id="tlScroll">
+      <div class="tl-inner" id="tlInner">
+        <div class="ruler" id="ruler"></div>
+        <div class="track" data-track="text"></div>
+        <div class="track overlay" data-track="overlay"></div>
+        <div class="track main" data-track="main"></div>
+        <div class="track" data-track="audio"></div>
+        <div class="playhead" id="playhead"><div class="ph-knob"></div></div>
+        <div class="snapline hidden" id="snapline"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Thanh điều hướng dưới (chỉ hiện trên màn hình nhỏ) -->
+<nav id="mnav">
+  <button data-m="media"><i>🎞</i><span>Media</span></button>
+  <button data-m="text"><i>T</i><span>Văn bản</span></button>
+  <button data-m="filter"><i>◐</i><span>Bộ lọc</span></button>
+  <button data-m="props"><i>✎</i><span>Chỉnh sửa</span></button>
+</nav>
+
+<!-- Modal -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><span id="modalTitle"></span><button id="modalClose" class="x">✕</button></div>
+    <div id="modalBody" class="modal-body"></div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+<div id="dropOverlay" class="drop-overlay hidden">Thả file để nhập</div>
+<div id="mediaPool" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

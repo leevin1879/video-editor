@@ -39,6 +39,8 @@ if (-not $config.legacy_owner_hash) {
 $config.allowed_emails = @('*')
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding($false)))
 Copy-Item -LiteralPath "$repo\deploy\vedit-authproxy.py" -Destination "$root\vedit-authproxy.py"
+Copy-Item -LiteralPath "$root\vedit-start-all.ps1" -Destination "$backup\vedit-start-all.ps1"
+Copy-Item -LiteralPath "$repo\deploy\vedit-start-all.ps1" -Destination "$root\vedit-start-all.ps1"
 function Stop-VeditPorts {
     foreach ($port in @(8765,8766)) {
         $lines = netstat -ano | Select-String "127\.0\.0\.1:$port\s+.*LISTENING"

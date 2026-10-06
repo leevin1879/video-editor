@@ -6,6 +6,7 @@ import http.client
 import json
 import os
 import time
+import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 with open(os.path.join(ROOT, "vedit-auth.json"), encoding="utf-8-sig") as stream:
@@ -41,4 +42,7 @@ for email in ("isolation-a@example.invalid", "isolation-b@example.invalid"):
     status, data = request(8766, "/api/projects", cookie(email))
     assert status == 200, "Project API failed: " + data.decode()[:400]
     assert json.loads(data) == [], "Test account unexpectedly has projects"
+    public = urllib.request.Request("https://vedit.1879.co.kr/api/account", headers={"Cookie": cookie(email)})
+    with urllib.request.urlopen(public, timeout=20) as response:
+        assert json.load(response)["id"] == hashlib.sha256(email.encode()).hexdigest()
 print("PASS: anonymous denied; two isolated accounts; forged identity stripped; wildcard enabled.")

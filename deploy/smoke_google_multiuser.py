@@ -38,5 +38,7 @@ for email in ("isolation-a@example.invalid", "isolation-b@example.invalid"):
     assert status == 200
     assert json.loads(data)["id"] == hashlib.sha256(email.encode()).hexdigest()
     assert json.loads(data)["free"] is True
-    assert json.loads(request(8766, "/api/projects", cookie(email))[1]) == []
+    status, data = request(8766, "/api/projects", cookie(email))
+    assert status == 200, "Project API failed: " + data.decode()[:400]
+    assert json.loads(data) == [], "Test account unexpectedly has projects"
 print("PASS: anonymous denied; two isolated accounts; forged identity stripped; wildcard enabled.")

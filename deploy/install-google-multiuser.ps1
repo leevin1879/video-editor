@@ -58,8 +58,7 @@ function Start-Vedit {
     $env:VEDIT_AUTH_CFG = $configPath
     $env:VEDIT_PORT = '8765'
     $env:VEDIT_PROXY_PORT = '8766'
-    Start-Process $py -ArgumentList '-u','server.py','--no-browser' -WorkingDirectory $repo -WindowStyle Hidden -RedirectStandardOutput "$root\vedit-server.out.log" -RedirectStandardError "$root\vedit-server.err.log"
-    Start-Process $py -ArgumentList '-u','vedit-authproxy.py' -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$root\vedit-proxy.out.log" -RedirectStandardError "$root\vedit-proxy.err.log"
+    Start-ScheduledTask -TaskName 'VEdit-StartAll'
 }
 try {
     Stop-VeditPorts

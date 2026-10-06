@@ -42,7 +42,10 @@ for email in ("isolation-a@example.invalid", "isolation-b@example.invalid"):
     status, data = request(8766, "/api/projects", cookie(email))
     assert status == 200, "Project API failed: " + data.decode()[:400]
     assert json.loads(data) == [], "Test account unexpectedly has projects"
-    public = urllib.request.Request("https://vedit.1879.co.kr/api/account", headers={"Cookie": cookie(email)})
+    # Exercise the browser route; Cloudflare rejects Python's default User-Agent.
+    public = urllib.request.Request("https://vedit.1879.co.kr/api/account", headers={
+        "Cookie": cookie(email),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"})
     with urllib.request.urlopen(public, timeout=20) as response:
         assert json.load(response)["id"] == hashlib.sha256(email.encode()).hexdigest()
 print("PASS: anonymous denied; two isolated accounts; forged identity stripped; wildcard enabled.")

@@ -7,7 +7,7 @@
 Yêu cầu: Python 3.10+ và [ffmpeg](https://ffmpeg.org/) có trong `PATH`.
 
 ```bash
-python server.py
+VEDIT_MULTIUSER=0 python server.py
 ```
 
 Mở <http://127.0.0.1:8765>. Trên Windows có thể bấm đúp `start.bat`.
@@ -37,7 +37,10 @@ Mở <http://127.0.0.1:8765>. Trên Windows có thể bấm đúp `start.bat`.
 
 ## Giới hạn hiện tại
 
-- Thiết kế cho **một người dùng trên một máy**: máy chủ chỉ nghe `127.0.0.1`, chưa có đăng nhập, mọi dự án dùng chung thư mục `workspace/`. Muốn cho nhiều người dùng qua mạng cần thêm tài khoản, tách dữ liệu theo người dùng, hàng đợi xuất video và giới hạn dung lượng trước.
+- Mặc định máy chủ yêu cầu danh tính ký HMAC từ Google auth proxy. Video, dự án, bản xuất, ảnh thu nhỏ, tệp tạm và tác vụ được tách theo tài khoản trong `workspace/users/<sha256-email>/`. Dữ liệu cũ chỉ dành cho tài khoản chủ cũ nếu cấu hình `legacy_owner_hash`; người khác không được truy cập. Proxy đọc `vedit-auth.json` ở thư mục cha (hoặc `VEDIT_AUTH_CFG`); server dùng cùng `session_secret`, không đưa file này lên GitHub.
+- Dùng riêng trên máy: đặt `VEDIT_MULTIUSER=0` (PowerShell: `$env:VEDIT_MULTIUSER='0'`) trước khi chạy. Không được dùng chế độ này cho website công khai.
+- Miễn phí, tối đa 500 MB mỗi file tải lên; kiểm tra dung lượng 2 GB mỗi tài khoản trước khi nhận file mới. Tối đa 2 tác vụ xuất/tách AI mỗi tài khoản, 4 toàn máy; máy bận sẽ yêu cầu thử lại. Bản xuất có thể làm tăng dung lượng sau bước kiểm tra tải lên.
+- Google OAuth consent screen phải ở trạng thái External / Production để tài khoản ngoài danh sách test đăng nhập được. Proxy cần `allowed_emails: ["*"]`; không tắt xác minh Google.
 - Xem trước không có slow motion mượt (chỉ có ở bản xuất).
 
 ## Giấy phép

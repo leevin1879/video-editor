@@ -14,6 +14,8 @@ import threading
 import time
 import uuid
 import webbrowser
+from contextvars import copy_context
+from tenant_storage import TENANT, TenantPath, TenantJobs, load_config, verified_tenant
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlparse
 
@@ -21,13 +23,15 @@ HOST, PORT = "127.0.0.1", int(os.environ.get("VEDIT_PORT", "8765"))
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(ROOT, "static")
 WS = os.path.join(ROOT, "workspace")
-MEDIA = os.path.join(WS, "media")
-THUMBS = os.path.join(WS, "thumbs")
-EXPORTS = os.path.join(WS, "exports")
-PROJECTS = os.path.join(WS, "projects")
-TMP = os.path.join(WS, "tmp")
-for d in (MEDIA, THUMBS, EXPORTS, PROJECTS, TMP):
-    os.makedirs(d, exist_ok=True)
+MULTIUSER = os.environ.get("VEDIT_MULTIUSER", "1") != "0"
+AUTH_CONFIG = load_config(ROOT) if MULTIUSER else {}
+AUTH_SECRET = AUTH_CONFIG["session_secret"].encode() if MULTIUSER else None
+MEDIA, THUMBS, EXPORTS, PROJECTS, TMP = (
+    TenantPath(WS, folder, MULTIUSER, AUTH_CONFIG.get("legacy_owner_hash"))
+    for folder in ("media", "thumbs", "exports", "projects", "tmp"))
+if not MULTIUSER:
+    for d in (MEDIA, THUMBS, EXPORTS, PROJECTS, TMP):
+        os.makedirs(d, exist_ok=True)
 
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "ffprobe"
@@ -49,8 +53,20 @@ MIME = {
     ".bmp": "image/bmp", ".svg": "image/svg+xml", ".ico": "image/x-icon",
 }
 
-JOBS = {}
+JOBS = TenantJobs()
 JOBS_LOCK = threading.Lock()
+UPLOAD_LOCK = threading.Lock()
+MAX_UPLOAD = 500 * 1024 * 1024
+MAX_STORAGE = 2 * 1024 * 1024 * 1024
+
+
+def start_job(job_id, job, target, args):
+    with JOBS_LOCK:
+        if JOBS.active(TENANT.get()) >= 2 or JOBS.active() >= 4:
+            raise ValueError("Máy chủ đang bận. Tối đa 2 tác vụ mỗi tài khoản và 4 tác vụ toàn hệ thống. Thử lại sau.")
+        JOBS[job_id] = job
+    context = copy_context()
+    threading.Thread(target=context.run, args=(target, *args), daemon=True).start()
 
 
 # ----------------------------------------------------------------- helpers
@@ -518,6 +534,23 @@ def run_export(job_id, cmd, total, log_path, job_dir):
 class Handler(BaseHTTPRequestHandler):
     server_version = "VideoEditor/1.0"
 
+    def handle_one_request(self):
+        token = TENANT.set(None)
+        try:
+            super().handle_one_request()
+        finally:
+            TENANT.reset(token)
+
+    def authenticate_storage(self):
+        if MULTIUSER:
+            try:
+                TENANT.set(verified_tenant(self.headers, self.command, self.path, AUTH_SECRET))
+            except PermissionError:
+                self.close_connection = True
+                self.send_json({"error": "Đăng nhập Google để sử dụng Vedit miễn phí."}, 401)
+                return False
+        return True
+
     def log_message(self, fmt, *a):  # gọn console
         if "/api/export/" not in self.path:
             sys.stderr.write("%s %s\n" % (self.command, self.path[:120]))
@@ -589,8 +622,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- GET
     def do_GET(self):
+        if not self.authenticate_storage():
+            return
         path = urlparse(self.path).path
         try:
+            if path == "/api/account":
+                return self.send_json({"id": TENANT.get() or "local", "free": True})
             if path in ("/", "/index.html"):
                 return self.send_file(os.path.join(STATIC, "index.html"))
             if path.startswith("/static/"):
@@ -631,12 +668,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- POST
     def do_POST(self):
+        if not self.authenticate_storage():
+            return
         path = urlparse(self.path).path
         try:
             if path == "/api/upload":
                 return self.handle_upload()
             if path == "/api/projects":
-                body = self.read_json()
+                body = self.read_json(limit=5 * 1024 * 1024)
                 proj = body.get("project") or {}
                 name = safe_name(str(proj.get("name") or "du-an"), "du-an")
                 with open(os.path.join(PROJECTS, name + ".json"), "w", encoding="utf-8") as f:
@@ -662,10 +701,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(e)}, 500)
 
     def handle_upload(self):
+        with UPLOAD_LOCK:
+            return self._handle_upload()
+
+    def _handle_upload(self):
         n = int(self.headers.get("Content-Length") or 0)
         orig = unquote(self.headers.get("X-Filename") or "file")
         if n <= 0:
             raise ValueError("File rỗng")
+        if n > MAX_UPLOAD:
+            self.close_connection = True
+            raise ValueError("Mỗi file tối đa 500 MB.")
+        folders = (MEDIA, THUMBS, EXPORTS, PROJECTS, TMP)
+        used = sum(os.path.getsize(os.path.join(base, f))
+                   for folder in folders for base, _, files in os.walk(folder) for f in files)
+        if used + n > MAX_STORAGE:
+            self.close_connection = True
+            raise ValueError("Dung lượng tài khoản đã đạt giới hạn 2 GB.")
         ext = os.path.splitext(orig)[1].lower()[:8]
         mid = uuid.uuid4().hex[:12]
         fname = mid + (ext if re.fullmatch(r"\.[a-z0-9]+", ext or "") else "")
@@ -701,9 +753,8 @@ class Handler(BaseHTTPRequestHandler):
         base = safe_name(os.path.splitext(str(body.get("name") or "audio"))[0], "audio")
         model = SEP_MODELS.get(str(body.get("quality")), "htdemucs")
         job_id = uuid.uuid4().hex[:12]
-        JOBS[job_id] = {"id": job_id, "kind": "separate", "status": "running", "progress": 0.0,
-                        "message": "Đang chuẩn bị…"}
-        threading.Thread(target=run_separate, args=(job_id, src, base, model), daemon=True).start()
+        start_job(job_id, {"id": job_id, "kind": "separate", "status": "running", "progress": 0.0,
+                          "message": "Đang chuẩn bị…"}, run_separate, (job_id, src, base, model))
         self.send_json({"jobId": job_id})
 
     def handle_extract_audio(self):
@@ -747,10 +798,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             shutil.rmtree(job_dir, ignore_errors=True)
             raise
-        JOBS[job_id] = {"id": job_id, "status": "running", "progress": 0.0, "out": out_path,
-                        "file": out_name, "url": f"/exports/{quote(out_name)}", "path": out_path, "total": total}
         log_path = os.path.join(EXPORTS, f".{job_id}.log")
-        threading.Thread(target=run_export, args=(job_id, cmd, total, log_path, job_dir), daemon=True).start()
+        try:
+            start_job(job_id, {"id": job_id, "status": "running", "progress": 0.0, "out": out_path,
+                              "file": out_name, "url": f"/exports/{quote(out_name)}", "total": total},
+                      run_export, (job_id, cmd, total, log_path, job_dir))
+        except ValueError:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
         self.send_json({"jobId": job_id, "total": total})
 
 

@@ -151,13 +151,14 @@ function clipRange(track, c) {
 
 // ------------------------------------------------------------------ autosave
 let saveTimer;
+let autosaveKey = null;
 function autosave() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { try { localStorage.setItem('vedit.autosave', JSON.stringify(P)); } catch { /* bỏ qua */ } }, 400);
+  saveTimer = setTimeout(() => { try { if (autosaveKey) localStorage.setItem(autosaveKey, JSON.stringify(P)); } catch { /* bỏ qua */ } }, 400);
 }
 function loadAutosave() {
   try {
-    const s = localStorage.getItem('vedit.autosave');
+    const s = autosaveKey && localStorage.getItem(autosaveKey);
     if (s) { const p = JSON.parse(s); if (p && p.tracks) P = normalizeProject(p); }
   } catch { /* bỏ qua */ }
 }
@@ -1698,7 +1699,7 @@ window.addEventListener('drop', e => {
   e.preventDefault(); dragDepth = 0; $('#dropOverlay').classList.add('hidden');
   uploadFiles([...e.dataTransfer.files]);
 });
-window.addEventListener('beforeunload', () => { try { localStorage.setItem('vedit.autosave', JSON.stringify(P)); } catch { /* bỏ qua */ } });
+window.addEventListener('beforeunload', () => { try { if (autosaveKey) localStorage.setItem(autosaveKey, JSON.stringify(P)); } catch { /* bỏ qua */ } });
 
 // ------------------------------------------------------------------ giao diện điện thoại / màn hình nhỏ
 const isMobile = () => matchMedia('(max-width: 768px)').matches;
@@ -1727,8 +1728,17 @@ document.addEventListener('click', e => {
 matchMedia('(max-width: 768px)').addEventListener('change', ev => { if (!ev.matches) openSheet(null); resizeCanvas(); renderTimeline(); });
 
 // ------------------------------------------------------------------ boot
-loadAutosave();
-renderTextPresets();
-loadProjectUI();
-pruneMissingMedia();
-requestAnimationFrame(loop);
+async function boot() {
+  try {
+    const account = await api('/api/account');
+    autosaveKey = `vedit.autosave.${account.id}`;
+    loadAutosave();
+    renderTextPresets();
+    loadProjectUI();
+    pruneMissingMedia();
+    requestAnimationFrame(loop);
+  } catch {
+    toast('Đăng nhập Google để sử dụng Vedit miễn phí.', 10000);
+  }
+}
+boot();

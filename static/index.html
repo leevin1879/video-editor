@@ -8,12 +8,13 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">▶ <b>VEdit</b></div>
+  <div class="brand" title="Miễn phí cho mọi tài khoản Google · Dữ liệu riêng tư">▶ <b>VEdit</b> · Free</div>
   <input id="projName" class="proj-name" spellcheck="false" title="Tên dự án">
   <div class="top-actions">
     <button id="btnNew" title="Dự án mới">Mới</button>
     <button id="btnOpen" title="Mở dự án">Mở</button>
     <button id="btnSave" title="Lưu (Ctrl+S)">Lưu</button>
+    <a href="/_auth/logout" title="Đăng xuất tài khoản Google">Đăng xuất</a>
     <span class="sep"></span>
     <button id="btnMore" title="Thêm">⋯</button>
     <button id="btnUndo" title="Hoàn tác (Ctrl+Z)">↶</button>
@@ -36,6 +37,7 @@
         <input id="fileInput" type="file" multiple accept="video/*,audio/*,image/*" hidden>
       </label>
       <div class="hint">Kéo thả file vào đây hoặc vào cửa sổ. Kéo media xuống timeline.</div>
+      <div class="hint">Miễn phí · Thư viện riêng cho tài khoản của bạn · Tối đa 500 MB/file, kiểm tra giới hạn lưu trữ 2 GB khi tải lên.</div>
       <div id="mediaList" class="media-list"></div>
     </section>
     <section class="tab-body hidden" id="tab-text">

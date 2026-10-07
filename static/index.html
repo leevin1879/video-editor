@@ -1,25 +1,32 @@
 <!doctype html>
-<html lang="vi">
+<html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Video Editor</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/fonts/korean.css">
 </head>
 <body>
 <header class="topbar">
-  <div class="brand" title="Miễn phí cho mọi tài khoản Google · Dữ liệu riêng tư">▶ <b>VEdit</b> · Free</div>
-  <input id="projName" class="proj-name" spellcheck="false" title="Tên dự án">
+  <div class="brand" title="모든 Google 계정 무료 · 비공개 데이터" data-i18n-title="Miễn phí cho mọi tài khoản Google · Dữ liệu riêng tư">▶ <b>VEdit</b> · Free</div>
+  <input id="projName" class="proj-name" spellcheck="false" title="프로젝트 이름" data-i18n-title="Tên dự án">
+  <div class="language-picker" id="languagePicker" role="group" aria-label="언어 선택">
+    <button type="button" data-language="ko" lang="ko">한국어</button>
+    <button type="button" data-language="vi" lang="vi">Tiếng Việt</button>
+    <button type="button" data-language="en" lang="en">English</button>
+  </div>
   <div class="top-actions">
-    <button id="btnNew" title="Dự án mới">Mới</button>
-    <button id="btnOpen" title="Mở dự án">Mở</button>
-    <button id="btnSave" title="Lưu (Ctrl+S)">Lưu</button>
-    <a href="/_auth/logout" title="Đăng xuất tài khoản Google">Đăng xuất</a>
+    <button id="btnChatGPT" title="ChatGPT">ChatGPT</button>
+    <button id="btnNew" title="새 프로젝트" data-i18n-title="Dự án mới"><span data-i18n="Mới">새로 만들기</span></button>
+    <button id="btnOpen" title="프로젝트 열기" data-i18n-title="Mở dự án"><span data-i18n="Mở">열기</span></button>
+    <button id="btnSave" title="저장 (Ctrl+S)" data-i18n-title="Lưu (Ctrl+S)"><span data-i18n="Lưu">저장</span></button>
+    <a href="/_auth/logout" title="Google 계정 로그아웃" data-i18n-title="Đăng xuất tài khoản Google"><span data-i18n="Đăng xuất">로그아웃</span></a>
     <span class="sep"></span>
-    <button id="btnMore" title="Thêm">⋯</button>
-    <button id="btnUndo" title="Hoàn tác (Ctrl+Z)">↶</button>
-    <button id="btnRedo" title="Làm lại (Ctrl+Y)">↷</button>
-    <button id="btnExport" class="primary">Xuất video</button>
+    <button id="btnMore" title="더 보기" data-i18n-title="Thêm">⋯</button>
+    <button id="btnUndo" title="실행 취소 (Ctrl+Z)" data-i18n-title="Hoàn tác (Ctrl+Z)">↶</button>
+    <button id="btnRedo" title="다시 실행 (Ctrl+Y)" data-i18n-title="Làm lại (Ctrl+Y)">↷</button>
+    <button id="btnExport" class="primary"><span data-i18n="Xuất video">동영상 내보내기</span></button>
   </div>
 </header>
 
@@ -27,25 +34,33 @@
   <!-- Thư viện -->
   <aside class="panel left">
     <div class="tabs">
-      <button class="tab active" data-tab="media">Media</button>
-      <button class="tab" data-tab="text">Văn bản</button>
-      <button class="tab" data-tab="filter">Bộ lọc</button>
-      <button class="sheet-close" title="Đóng">✕</button>
+      <button class="tab active" data-tab="media"><span data-i18n="Media">미디어</span></button>
+      <button class="tab" data-tab="text"><span data-i18n="Văn bản">텍스트</span></button>
+      <button class="tab" data-tab="filter"><span data-i18n="Bộ lọc">필터</span></button>
+      <button class="tab" data-tab="sounds"><span data-i18n="Hiệu ứng âm thanh">효과음</span></button>
+      <button class="sheet-close" title="닫기" data-i18n-title="Đóng">✕</button>
     </div>
     <section class="tab-body" id="tab-media">
-      <label class="import-btn">＋ Nhập file
-        <input id="fileInput" type="file" multiple accept="video/*,audio/*,image/*" hidden>
+      <label class="import-btn">＋ <span data-i18n="Nhập file">파일 가져오기</span><input id="fileInput" type="file" multiple accept="video/*,audio/*,image/*" hidden>
       </label>
-      <div class="hint">Kéo thả file vào đây hoặc vào cửa sổ. Kéo media xuống timeline.</div>
-      <div class="hint">Miễn phí · Thư viện riêng cho tài khoản của bạn · Tối đa 500 MB/file, kiểm tra giới hạn lưu trữ 2 GB khi tải lên.</div>
+      <div class="hint"><span data-i18n="Kéo thả file vào đây hoặc vào cửa sổ. Kéo media xuống timeline.">파일을 여기에 또는 창에 놓으세요. 미디어를 타임라인으로 드래그하세요.</span></div>
       <div id="mediaList" class="media-list"></div>
     </section>
+    <section class="tab-body hidden" id="tab-sounds">
+      <div class="hint" data-i18n="Nghe thử rồi thêm hiệu ứng tại vị trí đang chọn trên timeline.">미리 듣고 현재 재생 위치에 효과음을 추가하세요.</div>
+      <div id="soundList"></div>
+    </section>
     <section class="tab-body hidden" id="tab-text">
+      <button id="btnAutoSubtitles" class="primary" data-i18n="Phụ đề tự động">자동 자막</button>
+      <button id="btnSubtitleStyle" data-i18n="Chọn tất cả phụ đề">자막 전체 선택</button>
+      <div id="subtitleGroupStatus" class="hidden"><span data-i18n="Phụ đề đã chọn">선택한 자막</span>: <b id="subtitleGroupCount"></b><p data-i18n="Kéo phụ đề trên video để di chuyển tất cả; kéo góc để đổi cỡ tất cả.">영상의 자막을 드래그하면 전체가 이동하고 모서리를 드래그하면 전체 크기가 바뀝니다.</p><button id="btnSubtitleGroupEnd" data-i18n="Bỏ chọn">선택 해제</button></div>
+      <button id="btnSubtitleStyleDialog" data-i18n="Kiểu phụ đề">자막 스타일</button>
+      <button id="btnTranscript" data-i18n="Bản chép lời">대본 편집</button>
       <div class="text-presets" id="textPresets"></div>
     </section>
     <section class="tab-body hidden" id="tab-filter">
-      <div class="hint" style="margin-top:0">Bộ lọc áp cho toàn bộ video (video chính + lớp phủ). Bấm để chọn, xem trước ngay trên khung hình.</div>
-      <div class="field hidden" id="fxIntensityRow"><label>Cường độ<output id="fxIntensityOut">100%</output></label>
+      <div class="hint" style="margin-top:0"><span data-i18n="Bộ lọc áp cho toàn bộ video (video chính + lớp phủ). Bấm để chọn, xem trước ngay trên khung hình.">필터는 전체 동영상(메인 영상 + 오버레이)에 적용됩니다. 선택하면 즉시 미리 볼 수 있습니다.</span></div>
+      <div class="field hidden" id="fxIntensityRow"><label><span data-i18n="Cường độ">강도</span><output id="fxIntensityOut">100%</output></label>
         <input type="range" id="fxIntensity" min="0" max="1" step="0.01" value="1" style="width:100%"></div>
       <div class="fx-grid" id="filterGrid"></div>
     </section>
@@ -57,9 +72,9 @@
     <div class="transport">
       <span id="timeCur" class="time">00:00.00</span>
       <div class="tbtns">
-        <button id="btnStart" title="Về đầu (Home)">⏮</button>
-        <button id="btnPlay" class="play" title="Phát/Dừng (Space)">▶</button>
-        <button id="btnEnd" title="Về cuối (End)">⏭</button>
+        <button id="btnStart" title="처음으로 (Home)" data-i18n-title="Về đầu (Home)">⏮</button>
+        <button id="btnPlay" class="play" title="재생/일시 정지 (Space)" data-i18n-title="Phát/Dừng (Space)">▶</button>
+        <button id="btnEnd" title="끝으로 (End)" data-i18n-title="Về cuối (End)">⏭</button>
       </div>
       <span id="timeTotal" class="time dim">00:00.00</span>
     </div>
@@ -67,7 +82,7 @@
 
   <!-- Thuộc tính -->
   <aside class="panel right">
-    <div class="panel-title"><span id="propTitle">Dự án</span><button class="sheet-close" title="Đóng">✕</button></div>
+    <div class="panel-title"><span id="propTitle"><span data-i18n="Dự án">프로젝트</span></span><button class="sheet-close" title="닫기" data-i18n-title="Đóng">✕</button></div>
     <div id="props" class="props"></div>
   </aside>
 </main>
@@ -75,20 +90,20 @@
 <!-- Timeline -->
 <section class="timeline">
   <div class="tl-toolbar">
-    <button id="btnSplit" title="Cắt tại đầu phát (S)">✂ Tách</button>
-    <button id="btnDup" title="Nhân bản (Ctrl+D)">⧉ Nhân bản</button>
-    <button id="btnDel" title="Xóa (Delete)">🗑 Xóa</button>
+    <button id="btnSplit" title="재생 헤드에서 분할 (S)" data-i18n-title="Cắt tại đầu phát (S)">✂ <span data-i18n="Tách">분할</span></button>
+    <button id="btnDup" title="복제 (Ctrl+D)" data-i18n-title="Nhân bản (Ctrl+D)">⧉ <span data-i18n="Nhân bản">복제</span></button>
+    <button id="btnDel" title="삭제 (Delete)" data-i18n-title="Xóa (Delete)">🗑 <span data-i18n="Xóa">삭제</span></button>
     <span class="grow"></span>
-    <span class="dim">Zoom</span>
+    <span class="dim"><span data-i18n="Zoom">확대/축소</span></span>
     <input id="zoom" type="range" min="10" max="400" value="80">
   </div>
   <div class="tl-body">
     <div class="tl-heads">
       <div class="tl-ruler-head"></div>
-      <div class="tl-head" data-track="text"><span class="tl-name">T Văn bản</span><span class="tl-tg"><button data-toggle-track="hidden"></button></span></div>
-      <div class="tl-head ov" data-track="overlay"><span class="tl-name">▤ Lớp phủ</span><span class="tl-tg"><button data-toggle-track="hidden"></button><button data-toggle-track="muted"></button></span></div>
-      <div class="tl-head main" data-track="main"><span class="tl-name">▣ Video chính</span><span class="tl-tg"><button data-toggle-track="hidden"></button><button data-toggle-track="muted"></button></span></div>
-      <div class="tl-head" data-track="audio"><span class="tl-name">♪ Âm thanh</span><span class="tl-tg"><button data-toggle-track="muted"></button></span></div>
+      <div class="tl-head" data-track="text"><span class="tl-name">T <span data-i18n="Văn bản">텍스트</span></span><span class="tl-tg"><button data-toggle-track="hidden"></button></span></div>
+      <div class="tl-head ov" data-track="overlay"><span class="tl-name">▤ <span data-i18n="Lớp phủ">오버레이</span></span><span class="tl-tg"><button data-toggle-track="hidden"></button><button data-toggle-track="muted"></button></span></div>
+      <div class="tl-head main" data-track="main"><span class="tl-name">▣ <span data-i18n="Video chính">메인 영상</span></span><span class="tl-tg"><button data-toggle-track="hidden"></button><button data-toggle-track="muted"></button></span></div>
+      <div class="tl-head" data-track="audio"><span class="tl-name">♪ <span data-i18n="Âm thanh">오디오</span></span><span class="tl-tg"><button data-toggle-track="muted"></button></span></div>
     </div>
     <div class="tl-scroll" id="tlScroll">
       <div class="tl-inner" id="tlInner">
@@ -106,10 +121,10 @@
 
 <!-- Thanh điều hướng dưới (chỉ hiện trên màn hình nhỏ) -->
 <nav id="mnav">
-  <button data-m="media"><i>🎞</i><span>Media</span></button>
-  <button data-m="text"><i>T</i><span>Văn bản</span></button>
-  <button data-m="filter"><i>◐</i><span>Bộ lọc</span></button>
-  <button data-m="props"><i>✎</i><span>Chỉnh sửa</span></button>
+  <button data-m="media"><i>🎞</i><span><span data-i18n="Media">미디어</span></span></button>
+  <button data-m="text"><i>T</i><span><span data-i18n="Văn bản">텍스트</span></span></button>
+  <button data-m="filter"><i>◐</i><span><span data-i18n="Bộ lọc">필터</span></span></button>
+  <button data-m="props"><i>✎</i><span><span data-i18n="Chỉnh sửa">편집</span></span></button>
 </nav>
 
 <!-- Modal -->
@@ -120,9 +135,13 @@
   </div>
 </div>
 <div id="toast" class="toast hidden"></div>
-<div id="dropOverlay" class="drop-overlay hidden">Thả file để nhập</div>
+<div id="dropOverlay" class="drop-overlay hidden"><span data-i18n="Thả file để nhập">파일을 놓아 가져오기</span></div>
 <div id="mediaPool" hidden></div>
 
+<script src="/static/i18n.js"></script>
+<script src="/static/device-media.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/subtitles.js"></script>
+<script src="/static/plugin-editor.js"></script>
 </body>
 </html>

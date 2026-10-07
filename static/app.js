@@ -17,13 +17,13 @@ function toast(msg, ms = 2200) {
 async function api(url, opts = {}) {
   const r = await fetch(url, opts);
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(tr(data.error) || `HTTP ${r.status}`);
   return data;
 }
 
 // ------------------------------------------------------------------ state
 const RATIOS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350], '4:3': [1440, 1080] };
-const FONTS = ['Arial', 'Segoe UI', 'Malgun Gothic', 'Times New Roman', 'Georgia', 'Impact', 'Comic Sans MS', 'Consolas', 'Tahoma', 'Verdana'];
+const FONTS = ['Noto Sans KR', 'Jua', 'Dongle', 'Nanum Pen Script', 'Arial', 'Segoe UI', 'Malgun Gothic', 'Times New Roman', 'Georgia', 'Impact', 'Comic Sans MS', 'Consolas', 'Tahoma', 'Verdana'];
 
 // Bật/tắt hiển thị và âm thanh theo track (nút 👁 / 🔊 ở đầu track)
 const TRACK_TOGGLES = { text: ['hidden'], overlay: ['hidden', 'muted'], main: ['hidden', 'muted'], audio: ['muted'] };
@@ -33,7 +33,7 @@ function defaultTrackState() {
 const trackHidden = t => !!P.trackState?.[t]?.hidden;
 const trackMuted = t => !!P.trackState?.[t]?.muted;
 function newProject() {
-  return { version: 1, name: 'Dự án mới', ratio: '16:9', width: 1920, height: 1080, fps: 30,
+  return { version: 1, name: tr('Dự án mới'), ratio: '16:9', width: 1920, height: 1080, fps: 30,
     media: [], tracks: { main: [], overlay: [], text: [], audio: [] }, trackState: defaultTrackState(), filter: { id: 'none', intensity: 1 } };
 }
 let P = newProject();
@@ -114,16 +114,16 @@ function subCurve(pts, u0, u1) { // phần đường cong trong [u0, u1], co gi�
   const inner = pts.filter(([u]) => u > u0 + 1e-6 && u < u1 - 1e-6).map(([u, sp]) => [(u - u0) / (u1 - u0), sp]);
   return [[0, curveSpeedAt(pts, u0)], ...inner, [1, curveSpeedAt(pts, u1)]];
 }
-function speedLabel(c) { return c.curve ? '〰 ' + (c.curve.name || 'Đường cong') : (c.speed && c.speed !== 1 ? `${+(+c.speed).toFixed(2)}x` : ''); }
+function speedLabel(c) { return c.curve ? '〰 ' + tr(c.curve.name || 'Đường cong') : (c.speed && c.speed !== 1 ? `${+(+c.speed).toFixed(2)}x` : ''); }
 function mainDur(c) { return clipLen(c); }
 function audDur(c) { return clipLen(c); }
 function ovDur(c) { return clipLen(c); }
 const TRACK_H = 52;
 // Xếp lớp phủ vào các hàng không chồng thời gian (hàng 0 sát track chính; clip sau trong mảng = nằm trên)
-function overlayRows() {
+function overlayRows(track='overlay') {
   const rows = [], rowOf = new Map();
-  for (const c of P.tracks.overlay) {
-    const s0 = c.start, e0 = c.start + ovDur(c);
+  for (const c of P.tracks[track]) {
+    const s0 = c.start, e0 = c.start + (track==='text'?c.duration:ovDur(c));
     let r = 0;
     for (const [i, row] of rows.entries()) if (row.some(([s, e]) => s < e0 - 1e-6 && e > s0 + 1e-6)) r = i + 1;
     (rows[r] ||= []).push([s0, e0]); rowOf.set(c.id, r);
@@ -167,6 +167,7 @@ async function pruneMissingMedia() {
   const missing = [];
   await Promise.all(P.media.map(async m => {
     try {
+      if (m.localId) return;
       const r = await fetch(m.url, { headers: { Range: 'bytes=0-0' } });
       if (r.status === 404) missing.push(m.id);
       r.body?.cancel();
@@ -176,7 +177,7 @@ async function pruneMissingMedia() {
   P.media = P.media.filter(m => !missing.includes(m.id));
   for (const t of ['main', 'overlay', 'audio']) P.tracks[t] = P.tracks[t].filter(c => !missing.includes(c.mediaId));
   changed();
-  toast(`Đã bỏ ${missing.length} media không còn file gốc`);
+  toast(`${tr("Đã bỏ ")}${missing.length}${tr(" media không còn file gốc")}`);
 }
 function normalizeProject(p) {
   const base = newProject();
@@ -193,31 +194,30 @@ const fileInput = $('#fileInput');
 fileInput.addEventListener('change', () => { uploadFiles([...fileInput.files]); fileInput.value = ''; });
 const uploading = new Map();
 
-function uploadFiles(files) {
-  for (const f of files) {
-    if (!/^(video|audio|image)\//.test(f.type) && !/\.(mp4|mov|mkv|webm|avi|m4v|mp3|wav|m4a|aac|ogg|flac|jpe?g|png|webp|bmp)$/i.test(f.name)) {
-      toast(`Bỏ qua: ${f.name} (không hỗ trợ)`); continue;
+async function uploadFiles(files) {
+  if(ui.exporting) return;
+  for (const file of files) {
+    const key = uid(); uploading.set(key, {name:file.name, p:0}); renderMedia();
+    try {
+      const media = await DeviceMedia.importFile(file);
+      commit();
+      const missing=P.media.find(m=>m.missingLocal && m.name===media.name && (!m.size||m.size===media.size));
+      if(missing) {const id=missing.id; Object.assign(missing,media,{id,missingLocal:false}); await restoreDeviceMedia();}
+      else P.media.push(media);
+      changed(); toast(`${tr('Đã nhập: ')}${media.name}`);
+    } catch (e) {
+      const message = e.message === 'emptyFile'
+        ? 'File đã chọn trống (0 byte). Hãy chọn lại file video gốc.'
+        : e.name === 'NotReadableError'
+          ? 'Không thể truy cập file. Hãy kiểm tra quyền truy cập và chọn lại file.'
+          : e.name === 'QuotaExceededError'
+            ? 'Bộ nhớ trình duyệt đã đầy. Hãy giải phóng dung lượng rồi thử lại.'
+            : 'Không đọc được file trong trình duyệt. Thử đổi sang MP4 H.264/AAC.';
+      toast(tr(message), 6000); console.error(e);
     }
-    const key = uid();
-    uploading.set(key, { name: f.name, p: 0 });
-    renderMedia();
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload');
-    xhr.setRequestHeader('X-Filename', encodeURIComponent(f.name));
-    xhr.upload.onprogress = e => { if (e.lengthComputable) { uploading.get(key).p = e.loaded / e.total; renderMedia(); } };
-    xhr.onload = () => {
-      uploading.delete(key);
-      let res = {};
-      try { res = JSON.parse(xhr.responseText); } catch { /* bỏ qua */ }
-      if (xhr.status === 200 && res.id) {
-        commit(); P.media.push(res); changed(); toast(`Đã nhập: ${res.name}`);
-      } else { renderMedia(); toast(`Lỗi nhập ${f.name}: ${res.error || xhr.status}`, 4000); }
-    };
-    xhr.onerror = () => { uploading.delete(key); renderMedia(); toast(`Lỗi mạng khi nhập ${f.name}`); };
-    xhr.send(f);
+    finally { uploading.delete(key); renderMedia(); }
   }
 }
-
 function renderMedia() {
   const list = $('#mediaList');
   let html = '';
@@ -227,21 +227,21 @@ function renderMedia() {
   }
   for (const m of P.media) {
     const tag = t => `<span style="font-size:11px;margin-left:4px">${t}</span>`;
-    const icon = m.type !== 'audio' ? '' : m.mrOf ? '🎵' + tag('MR - beat') : m.vocalsOf ? '🎤' + tag('giọng hát') : m.sourceOf ? '♪' + tag('tách từ video') : '♪';
+    const icon = m.type !== 'audio' ? '' : m.mrOf ? '🎵' + tag(tr('MR - beat')) : m.vocalsOf ? '🎤' + tag(tr('giọng hát')) : m.sourceOf ? '♪' + tag(tr('tách từ video')) : '♪';
     const canSep = m.hasAudio && !m.mrOf && !m.vocalsOf;
     const bg = m.thumb ? `style="background-image:url('${m.thumb}')"` : '';
-    const dur = m.type === 'image' ? 'Ảnh' : fmt(m.duration);
+    const dur = m.type === 'image' ? tr('Ảnh') : fmt(m.duration);
     html += `<div class="media-item" draggable="true" data-id="${m.id}" title="${esc(m.name)}">
       <div class="mthumb" ${bg}>${icon}</div><div class="mdur">${dur}</div>
       <div class="mname">${esc(m.name)}</div>
-      <button class="madd" data-act="add" title="Thêm vào timeline">＋</button>
-      ${m.type !== 'audio' ? `<button class="mbtn mpip" data-act="pip" title="Thêm làm lớp phủ (video trong video - PiP)">PiP</button>` : ''}
-      ${m.type === 'video' && m.hasAudio ? `<button class="mbtn maud" data-act="audio" title="Chỉ lấy tiếng (không lấy hình) đưa vào track Âm thanh">♪</button>
-      <button class="mbtn mmp3" data-act="mp3" title="Tách tiếng ra file MP3 để tải về">MP3</button>` : ''}
-      ${canSep ? `<button class="mbtn msep" data-act="sep" style="left:${m.type === 'audio' ? 4 : 40}px" title="Tách giọng hát bằng AI để tạo beat (MR)">MR</button>` : ''}
-      <button class="mdel" data-act="del" title="Xóa khỏi thư viện">✕</button></div>`;
+      <button class="madd" data-act="add" title="${tr("Thêm vào timeline")}">＋</button>
+      ${m.type !== 'audio' ? `<button class="mbtn mpip" data-act="pip" title="${tr("Thêm làm lớp phủ (video trong video - PiP)")}">PiP</button>` : ''}
+      ${m.type === 'video' && m.hasAudio ? `<button class="mbtn maud" data-act="audio" title="${tr("Chỉ lấy tiếng (không lấy hình) đưa vào track Âm thanh")}">♪</button>
+      <button class="mbtn mmp3" data-act="mp3" title="${tr("Tách tiếng ra file MP3 để tải về")}">MP3</button>` : ''}
+      ${canSep ? `<button class="mbtn msep" data-act="sep" style="left:${m.type === 'audio' ? 4 : 40}px" title="${tr("Tách giọng hát bằng AI để tạo beat (MR)")}">MR</button>` : ''}
+      <button class="mdel" data-act="del" title="${tr("Xóa khỏi thư viện")}">✕</button></div>`;
   }
-  list.innerHTML = html || '<div class="hint">Chưa có media.</div>';
+  list.innerHTML = html || `<div class="hint">${tr("Chưa có media.")}</div>`;
 }
 $('#mediaList').addEventListener('click', e => {
   const item = e.target.closest('.media-item[data-id]'); if (!item) return;
@@ -253,7 +253,7 @@ $('#mediaList').addEventListener('click', e => {
   if (act === 'sep') askSeparate(m);
   if (act === 'del') {
     const used = ['main', 'overlay', 'audio'].some(t => P.tracks[t].some(c => c.mediaId === m.id));
-    if (used && !confirm('Media này đang dùng trên timeline. Xóa luôn các clip liên quan?')) return;
+    if (used && !confirm(tr('Media này đang dùng trên timeline. Xóa luôn các clip liên quan?'))) return;
     commit();
     P.media = P.media.filter(x => x !== m);
     for (const t of ['main', 'overlay', 'audio']) P.tracks[t] = P.tracks[t].filter(c => c.mediaId !== m.id);
@@ -285,7 +285,7 @@ function addMediaToTimeline(m, opts = {}) {
   commit();
   let clip, track;
   if (m.type === 'audio' || opts.track === 'audio') {
-    if (!m.hasAudio) { hist.undo.pop(); return toast('Media này không có âm thanh'); }
+    if (!m.hasAudio) { hist.undo.pop(); return toast(tr('Media này không có âm thanh')); }
     track = 'audio'; clip = makeAudioClip(m, opts.time ?? ui.playhead); P.tracks.audio.push(clip);
   } else if (opts.track === 'overlay') {
     track = 'overlay'; clip = makeOverlayClip(m, opts.time ?? ui.playhead); P.tracks.overlay.push(clip);
@@ -319,17 +319,26 @@ const TEXT_PRESETS = [
   { label: 'Nền vàng', text: 'HOT!', color: '#111111', bg: true, bgColor: '#ffd400', bold: true, fontSize: 90 },
   { label: 'Viền đỏ', text: 'Wow', color: '#ffffff', strokeWidth: 8, strokeColor: '#e0123c', bold: true, fontSize: 120 },
 ];
+const TEXT_STYLES = [
+  {id:'clean',name:'Rõ nét',font:'Noto Sans KR',color:'#ffffff',bold:true,strokeWidth:4,strokeColor:'#000000',bg:false,bgColor:'#000000aa'},
+  {id:'pink',name:'Hồng dễ thương',font:'Jua',color:'#ffb6dc',bold:false,strokeWidth:5,strokeColor:'#701b53',bg:false,bgColor:'#000000aa'},
+  {id:'yellow',name:'Vàng nổi bật',font:'Jua',color:'#ffe14d',bold:false,strokeWidth:6,strokeColor:'#151515',bg:false,bgColor:'#000000aa'},
+  {id:'blue',name:'Bong bóng xanh',font:'Noto Sans KR',color:'#ffffff',bold:true,strokeWidth:0,strokeColor:'#000000',bg:true,bgColor:'#225faee6'},
+  {id:'hand',name:'Chữ viết tay',font:'Nanum Pen Script',color:'#fff0ce',bold:false,strokeWidth:3,strokeColor:'#47332a',bg:false,bgColor:'#000000aa'},
+  {id:'label',name:'Nền đen',font:'Noto Sans KR',color:'#ffffff',bold:true,strokeWidth:0,strokeColor:'#000000',bg:true,bgColor:'#000000cc'},
+];
+function textStyleButtons(c){return `<div class="group-title">${tr('Kiểu chữ')}</div><div class="text-style-grid">${TEXT_STYLES.map(p=>`<button type="button" data-text-style="${p.id}" class="${c.textStyle===p.id?'on':''}" title="${esc(tr(p.name))}"><span style="font-family:'${p.font}';color:${p.color};background:${p.bg?p.bgColor:'#222'};font-weight:${p.bold?700:400};-webkit-text-stroke:${p.strokeWidth?'.5px '+p.strokeColor:'0'}">한글 Aa</span><small>${esc(tr(p.name))}</small></button>`).join('')}</div>`;}
 function makeTextClip(preset) {
-  const p = { ...preset }; delete p.label;
-  return { id: uid(), start: ui.playhead, duration: 3, text: 'Văn bản', font: 'Arial', fontSize: 80, color: '#ffffff',
+  const p = { ...preset, text: tr(preset.text) }; delete p.label;
+  return { id: uid(), start: ui.playhead, duration: 3, text: tr('Văn bản'), font: 'Arial', fontSize: 80, color: '#ffffff',
     bold: false, strokeWidth: 0, strokeColor: '#000000', bg: false, bgColor: '#000000aa', x: 0.5, y: 0.5, ...p };
 }
 function renderTextPresets() {
   $('#textPresets').innerHTML = TEXT_PRESETS.map((p, i) => {
     const st = [`color:${p.color}`, `font-family:'${p.font || 'Arial'}'`, `font-weight:${p.bold ? 700 : 400}`];
     if (p.strokeWidth) st.push(`-webkit-text-stroke:1px ${p.strokeColor}`);
-    const inner = p.bg ? `<span style="background:${p.bgColor};padding:2px 8px;border-radius:4px">${esc(p.text)}</span>` : esc(p.text);
-    return `<div class="text-preset" data-i="${i}" style="${st.join(';')}" title="${esc(p.label)}">${inner}</div>`;
+    const inner = p.bg ? `<span style="background:${p.bgColor};padding:2px 8px;border-radius:4px">${esc(tr(p.text))}</span>` : esc(tr(p.text));
+    return `<div class="text-preset" data-i="${i}" style="${st.join(';')}" title="${esc(tr(p.label))}">${inner}</div>`;
   }).join('');
 }
 $('#textPresets').addEventListener('click', e => {
@@ -339,7 +348,35 @@ $('#textPresets').addEventListener('click', e => {
   P.tracks.text.push(c); ui.sel = { track: 'text', id: c.id }; changed();
   if (isMobile()) openSheet(null);
 });
+const SOUND_EFFECTS = [ ['whoosh','Lướt chuyển cảnh'], ['pop','Bật pop'], ['notification','Ting thông báo'], ['success','Thành công'], ['impact','Nhấn mạnh'], ['click','Nhấp chuột'], ['sparkle','Lấp lánh'], ['error','Lỗi / sai'] ];
+let soundPreview = null, soundPreviewId = null;
+function stopSoundPreview() { if(soundPreview) { soundPreview.pause(); soundPreview.currentTime=0; } soundPreview=null; soundPreviewId=null; }
+function renderSounds() {
+  $('#soundList').innerHTML=SOUND_EFFECTS.map(([id,name])=>`<div class="sound-item"><span>${esc(tr(name))}</span><button data-sound="${id}" data-action="preview" aria-label="${esc(tr('Nghe thử')+' '+tr(name))}">${soundPreviewId===id?'■ '+tr('Dừng'):'▶ '+tr('Nghe thử')}</button><button data-sound="${id}" data-action="add" title="${esc(tr('Thêm vào timeline'))}">＋ ${tr('Thêm âm thanh')}</button></div>`).join('');
+}
+$('#soundList').addEventListener('click', async e=>{
+  const b=e.target.closest('button[data-sound]'); if(!b || ui.exporting) return;
+  const [id,name]=SOUND_EFFECTS.find(s=>s[0]===b.dataset.sound);
+  if(b.dataset.action==='preview') {
+    const same=soundPreviewId===id; stopSoundPreview();
+    if(!same) {soundPreview=new Audio(`/static/sounds/${id}.wav`); soundPreviewId=id; soundPreview.onended=()=>{stopSoundPreview();renderSounds();}; soundPreview.play().catch(()=>{stopSoundPreview();renderSounds();toast(tr('Không tải được hiệu ứng âm thanh.'));});}
+    renderSounds(); return;
+  }
+  stopSoundPreview();renderSounds(); b.disabled=true;
+  try {
+    let m=P.media.find(m=>m.soundEffect===id && !m.missingLocal);
+    if(!m) {
+      const r=await fetch(`/static/sounds/${id}.wav`); if(!r.ok) throw new Error('Sound unavailable');
+      m=await DeviceMedia.importFile(new File([await r.blob()],`${tr(name)}.wav`,{type:'audio/wav'}));
+      m.soundEffect=id; commit();P.media.push(m);
+    }
+    addMediaToTimeline(m,{track:'audio',time:ui.playhead});
+  } catch(err) {console.error(err);toast(tr('Không tải được hiệu ứng âm thanh.'));}
+  finally {b.disabled=false;}
+});
+renderSounds();
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
+  stopSoundPreview(); renderSounds();
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
   document.querySelectorAll('.tab-body').forEach(x => x.classList.toggle('hidden', x.id !== 'tab-' + b.dataset.tab));
   if (b.dataset.tab === 'filter') { renderFilterPanel(); ui.dirty = true; }
@@ -390,6 +427,7 @@ function getAudio(c, m) {
 }
 
 function resizeCanvas() {
+  if (ui.exporting) return;
   canvas.width = P.width; canvas.height = P.height;
   const st = $('#stage');
   const s = Math.min((st.clientWidth - 24) / P.width, (st.clientHeight - 24) / P.height);
@@ -505,8 +543,8 @@ function applyGlobalFilter(W, H) { // lọc toàn bộ hình (video chính + l�
 }
 function renderFilterPanel() {
   const cur = P.filter?.id || 'none';
-  $('#filterGrid').innerHTML = FILTERS.map(f => `<div class="fx-item${f.id === cur ? ' on' : ''}" data-fx="${f.id}" title="${esc(f.name)}">
-    <canvas width="240" height="135" data-fxc="${f.id}"></canvas><div class="fx-name">${esc(f.name)}</div></div>`).join('');
+  $('#filterGrid').innerHTML = FILTERS.map(f => `<div class="fx-item${f.id === cur ? ' on' : ''}" data-fx="${f.id}" title="${esc(tr(f.name))}">
+    <canvas width="240" height="135" data-fxc="${f.id}"></canvas><div class="fx-name">${esc(tr(f.name))}</div></div>`).join('');
   $('#fxIntensity').value = P.filter?.intensity ?? 1;
   $('#fxIntensityOut').textContent = Math.round((P.filter?.intensity ?? 1) * 100) + '%';
   $('#fxIntensityRow').classList.toggle('hidden', cur === 'none');
@@ -535,7 +573,7 @@ function setFilter(id) {
   commit();
   P.filter = { id, intensity: P.filter?.intensity || 1 };
   renderFilterPanel(); changed(false);
-  toast(id === 'none' ? 'Đã bỏ bộ lọc' : `Bộ lọc: ${filterById(id).name}`);
+  toast(id === 'none' ? tr('Đã bỏ bộ lọc') : `${tr("Bộ lọc:")} ${tr(filterById(id).name)}`);
 }
 
 function cssFilter(c) {
@@ -553,6 +591,7 @@ function activeMain(t) {
 }
 
 function syncMedia(t) {
+  mainPreview=null;
   const act = activeMain(t);
   const activeVid = act && !isImage(act.c) ? mediaById(act.c.mediaId) : null;
   for (const [id, v] of videos) if (!id.startsWith('ov:') && (!activeVid || id !== activeVid.id)) { if (!v.paused) v.pause(); }
@@ -609,11 +648,19 @@ function syncMedia(t) {
   for (const [id, a] of audios) if (!live.has(id)) { a.pause(); audios.delete(id); }
 }
 
-function drawFit(src, sw, sh, fit) {
+function mainBox(c, sw, sh) {
+  const W=canvas.width,H=canvas.height;
+  const factor=(c.fit==='cover'?Math.max(W/sw,H/sh):Math.min(W/sw,H/sh))*(c.scale??1);
+  return {cx:(c.x??0.5)*W,cy:(c.y??0.5)*H,w:sw*factor,h:sh*factor,rot:0};
+}
+let mainPreview=null;
+function drawFit(src, sw, sh, fit, c) {
   const W = canvas.width, H = canvas.height;
   const s = fit === 'cover' ? Math.max(W / sw, H / sh) : Math.min(W / sw, H / sh);
   const dw = sw * s, dh = sh * s;
-  ctx.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  const b=mainBox(c,sw,sh);
+  ctx.drawImage(src,b.cx-b.w/2,b.cy-b.h/2,b.w,b.h);
+  mainPreview={track:'main',c,box:b};
 }
 
 function drawText(g, c, W, H) {
@@ -645,6 +692,10 @@ const textBoxes = []; // hộp chữ đang hiển thị, để kéo trên previe
 const ovBoxes = [];   // lớp phủ đang hiển thị (tâm, kích thước, góc xoay)
 function overlaySource(c) {
   const m = mediaById(c.mediaId); if (!m) return null;
+  if (ui.exportFrames) {
+    const src = ui.exportFrames.get(m.type === 'image' ? m.id : 'ov:' + c.id);
+    return src ? {src, sw:src.width, sh:src.height} : null;
+  }
   if (m.type === 'image') { const im = getImage(m); return im.complete && im.naturalWidth ? { src: im, sw: im.naturalWidth, sh: im.naturalHeight } : null; }
   const v = videos.get('ov:' + c.id); return v && v.readyState >= 2 && v.videoWidth ? { src: v, sw: v.videoWidth, sh: v.videoHeight } : null;
 }
@@ -663,12 +714,13 @@ function render(t) {
     const c = act.c, m = mediaById(c.mediaId);
     const local = t - act.start;
     let src = null, sw = 0, sh = 0;
-    if (m.type === 'image') { const im = getImage(m); if (im.complete && im.naturalWidth) { src = im; sw = im.naturalWidth; sh = im.naturalHeight; } }
+    if (ui.exportFrames) { src=ui.exportFrames.get(m.type==='image'?m.id:'main:'+c.id); if(src){sw=src.width;sh=src.height;} }
+    else if (m.type === 'image') { const im = getImage(m); if (im.complete && im.naturalWidth) { src = im; sw = im.naturalWidth; sh = im.naturalHeight; } }
     else { const v = getVideo(m); if (v.readyState >= 2 && v.videoWidth) { src = v; sw = v.videoWidth; sh = v.videoHeight; } }
     if (src) {
       ctx.filter = cssFilter(c);
       ctx.globalAlpha = fadeFactor(local, act.dur, c.fadeIn, c.fadeOut);
-      drawFit(src, sw, sh, c.fit);
+      drawFit(src, sw, sh, c.fit, c);
       ctx.globalAlpha = 1; ctx.filter = 'none';
     }
   }
@@ -687,30 +739,25 @@ function render(t) {
     ovBoxes.push({ c, box: b });
   }
   applyGlobalFilter(W, H);
-  const ovSel = ui.sel?.track === 'overlay' && ovBoxes.find(o => o.c.id === ui.sel.id);
-  if (ovSel && !ui.playing) {
-    const b = ovSel.box, hs = handleSize();
-    ctx.save(); ctx.translate(b.cx, b.cy); ctx.rotate(b.rot);
-    ctx.strokeStyle = '#22d3c5'; ctx.lineWidth = Math.max(2, W / 600); ctx.setLineDash([12, 8]);
-    ctx.strokeRect(-b.w / 2, -b.h / 2, b.w, b.h);
-    ctx.setLineDash([]); ctx.fillStyle = '#22d3c5';
-    ctx.fillRect(b.w / 2 - hs / 2, b.h / 2 - hs / 2, hs, hs);
-    ctx.restore();
-  }
   textBoxes.length = 0;
   for (const c of trackHidden('text') ? [] : P.tracks.text) {
     if (t >= c.start && t < c.start + c.duration) textBoxes.push({ c, box: drawText(ctx, c, W, H) });
   }
-  const sel = ui.sel?.track === 'text' && textBoxes.find(b => b.c.id === ui.sel.id);
-  if (sel && !ui.playing) {
-    const { x, y, w, h } = sel.box, p = 12;
-    ctx.save(); ctx.strokeStyle = '#22d3c5'; ctx.lineWidth = Math.max(2, W / 600); ctx.setLineDash([12, 8]);
-    ctx.strokeRect(x - p, y - p, w + 2 * p, h + 2 * p); ctx.restore();
+  const selected=ui.subtitleGroup?previewTargets().find(o=>o.track==='text'&&o.c.subtitleSource):previewTargets().find(o=>o.track===ui.sel?.track&&o.c.id===ui.sel?.id);
+  if(selected&&!ui.playing&&!ui.exporting) {
+    const b=selected.box,hs=handleSize();
+    ctx.save();ctx.translate(b.cx,b.cy);ctx.rotate(b.rot);
+    ctx.strokeStyle='#22d3c5';ctx.lineWidth=Math.max(2,W/600);ctx.setLineDash([12,8]);
+    ctx.strokeRect(-b.w/2,-b.h/2,b.w,b.h);ctx.restore();
+    ctx.save();ctx.fillStyle='#22d3c5';
+    for(const h of previewHandles(b))ctx.fillRect(h.x-hs/2,h.y-hs/2,hs,hs);
+    ctx.restore();
   }
 }
 
 // vòng lặp chính
 function loop(now) {
+  if (ui.exporting) { requestAnimationFrame(loop); return; }
   if (ui.playing) {
     const total = totalDuration();
     ui.playhead = ui.t0 + (now - ui.wall0) / 1000;
@@ -741,68 +788,69 @@ function seek(t) {
   ui.dirty = true;
 }
 
-// kéo chữ / lớp phủ trực tiếp trên preview
-const handleSize = () => Math.max(18, canvas.width / 55);
-function toLocal(b, px, py) { // toạ độ điểm trong hệ trục của khung (đã bỏ góc xoay)
-  const dx = px - b.cx, dy = py - b.cy, co = Math.cos(-b.rot), si = Math.sin(-b.rot);
-  return [dx * co - dy * si, dx * si + dy * co];
+// Direct preview transforms: text, main video and overlays.
+const handleSize = () => 12 * canvas.width / Math.max(1,canvas.getBoundingClientRect().width);
+function toLocal(b,px,py) {
+  const dx=px-b.cx,dy=py-b.cy,co=Math.cos(-b.rot),si=Math.sin(-b.rot);
+  return [dx*co-dy*si,dx*si+dy*co];
 }
-canvas.addEventListener('pointerdown', e => {
-  const r = canvas.getBoundingClientRect();
-  const toCanvas = ev => [(ev.clientX - r.left) * canvas.width / r.width, (ev.clientY - r.top) * canvas.height / r.height];
-  const [px, py] = toCanvas(e);
-  let target = null, mode = 'move';
-  // 1) góc đổi cỡ của lớp phủ đang chọn
-  const selOv = ui.sel?.track === 'overlay' && ovBoxes.find(o => o.c.id === ui.sel.id);
-  if (selOv) {
-    const [lx, ly] = toLocal(selOv.box, px, py), hs = handleSize() * 1.2;
-    if (Math.abs(lx - selOv.box.w / 2) <= hs && Math.abs(ly - selOv.box.h / 2) <= hs) { target = { track: 'overlay', c: selOv.c, box: selOv.box }; mode = 'resize'; }
-  }
-  // 2) chữ (nằm trên cùng)
-  if (!target) {
-    const hit = [...textBoxes].reverse().find(b => px >= b.box.x - 15 && px <= b.box.x + b.box.w + 15 && py >= b.box.y - 15 && py <= b.box.y + b.box.h + 15);
-    if (hit) target = { track: 'text', c: hit.c };
-  }
-  // 3) lớp phủ (lớp trên được ưu tiên)
-  if (!target) {
-    const hit = [...ovBoxes].reverse().find(o => { const [lx, ly] = toLocal(o.box, px, py); return Math.abs(lx) <= o.box.w / 2 && Math.abs(ly) <= o.box.h / 2; });
-    if (hit) target = { track: 'overlay', c: hit.c, box: hit.box };
-  }
-  if (!target) { if (ui.sel) { ui.sel = null; changed(); } return; }
-  const c = target.c;
-  if (!(ui.sel && ui.sel.id === c.id)) { ui.sel = { track: target.track, id: c.id }; changed(); }
-  const before = JSON.stringify(P); const ox = c.x, oy = c.y, oscale = c.scale;
-  const d0 = target.box ? Math.hypot(px - target.box.cx, py - target.box.cy) : 1;
-  canvas.setPointerCapture(e.pointerId);
-  const move = ev => {
-    if (mode === 'resize') {
-      const [qx, qy] = toCanvas(ev);
-      c.scale = clamp(oscale * Math.hypot(qx - target.box.cx, qy - target.box.cy) / Math.max(1, d0), 0.05, 3);
-    } else {
-      c.x = clamp(ox + (ev.clientX - e.clientX) / r.width, -0.5, 1.5);
-      c.y = clamp(oy + (ev.clientY - e.clientY) / r.height, -0.5, 1.5);
-      if (Math.abs(c.x - 0.5) < 0.012) c.x = 0.5; // hít vào tâm khung
-      if (Math.abs(c.y - 0.5) < 0.012) c.y = 0.5;
+function previewTargets() {
+  return [...(mainPreview?[mainPreview]:[]),...ovBoxes.map(o=>({...o,track:'overlay'})),
+    ...textBoxes.map(o=>({c:o.c,track:'text',box:{cx:o.box.x+o.box.w/2,cy:o.box.y+o.box.h/2,w:o.box.w+24,h:o.box.h+24,rot:0}}))];
+}
+function previewHandles(b) {
+  return [[-1,-1],[1,-1],[-1,1],[1,1]].map(([x,y])=>({
+    x:clamp(b.cx+x*b.w/2*Math.cos(b.rot)-y*b.h/2*Math.sin(b.rot),handleSize()/2,canvas.width-handleSize()/2),
+    y:clamp(b.cy+x*b.w/2*Math.sin(b.rot)+y*b.h/2*Math.cos(b.rot),handleSize()/2,canvas.height-handleSize()/2)}));
+}
+function previewHit(px,py) {
+  const all=previewTargets(),sel=ui.subtitleGroup?all.find(o=>o.track==='text'&&o.c.subtitleSource):all.find(o=>o.track===ui.sel?.track&&o.c.id===ui.sel?.id);
+  if(sel&&previewHandles(sel.box).some(h=>Math.abs(px-h.x)<=handleSize()&&Math.abs(py-h.y)<=handleSize()))return {...sel,mode:'resize'};
+  const hit=all.reverse().find(o=>{const [x,y]=toLocal(o.box,px,py);return Math.abs(x)<=o.box.w/2&&Math.abs(y)<=o.box.h/2;});
+  return hit?{...hit,mode:'move'}:null;
+}
+canvas.addEventListener('pointerdown',e=>{
+  if(ui.exporting||e.button!==0)return;
+  const r=canvas.getBoundingClientRect(),point=ev=>[(ev.clientX-r.left)*canvas.width/r.width,(ev.clientY-r.top)*canvas.height/r.height];
+  const [px,py]=point(e),target=previewHit(px,py);
+  if(!target){ui.sel=null;changed();return;}
+  e.preventDefault();setPlaying(false);
+  const c=target.c,b=target.box,before=JSON.stringify(P),ox=c.x??0.5,oy=c.y??0.5,scale=c.scale??(target.track==='main'?1:0.4),font=c.fontSize||60;
+  const group=ui.subtitleGroup&&target.track==='text'&&c.subtitleSource?P.tracks.text.filter(c=>c.subtitleSource):null;
+  if(ui.subtitleGroup&&!group){ui.subtitleGroup=false;$('#subtitleGroupStatus').classList.add('hidden');}
+  ui.sel={track:target.track,id:c.id};changed();
+  const d0=Math.max(1,Math.hypot(px-b.cx,py-b.cy));canvas.setPointerCapture(e.pointerId);
+  const move=ev=>{
+    if(ev.pointerId!==e.pointerId)return;
+    const [x,y]=point(ev);
+    if(target.mode==='resize'){
+      const factor=Math.hypot(x-b.cx,y-b.cy)/d0;
+      if(target.track==='text')c.fontSize=clamp(Math.round(font*factor),16,300);
+      else c.scale=clamp(scale*factor,0.05,3);
+    }else{
+      c.x=clamp(ox+(ev.clientX-e.clientX)/r.width,-0.5,1.5);
+      c.y=clamp(oy+(ev.clientY-e.clientY)/r.height,-0.5,1.5);
+      if(Math.abs(c.x-0.5)<0.012)c.x=0.5;
+      if(Math.abs(c.y-0.5)<0.012)c.y=0.5;
     }
-    ui.dirty = true;
+    if(group)for(const other of group){
+      if(target.mode==='resize')other.fontSize=c.fontSize;
+      else {other.x=c.x;other.y=c.y;}
+    }
+    ui.dirty=true;
   };
-  const up = () => {
-    canvas.removeEventListener('pointermove', move); canvas.removeEventListener('pointerup', up);
-    if (JSON.stringify(P) !== before) { hist.undo.push(before); hist.redo.length = 0; changed(); }
+  const up=ev=>{
+    if(ev.pointerId!==e.pointerId)return;
+    canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);
+    if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);
+    if(JSON.stringify(P)!==before){hist.undo.push(before);hist.redo.length=0;changed();}
   };
-  canvas.addEventListener('pointermove', move); canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);
 });
-canvas.addEventListener('pointermove', e => { // con trỏ đổi cỡ khi rê vào góc
-  const selOv = ui.sel?.track === 'overlay' && ovBoxes.find(o => o.c.id === ui.sel.id);
-  let cur = '';
-  if (selOv && e.buttons === 0) {
-    const r = canvas.getBoundingClientRect();
-    const [lx, ly] = toLocal(selOv.box, (e.clientX - r.left) * canvas.width / r.width, (e.clientY - r.top) * canvas.height / r.height);
-    const hs = handleSize() * 1.2;
-    if (Math.abs(lx - selOv.box.w / 2) <= hs && Math.abs(ly - selOv.box.h / 2) <= hs) cur = 'nwse-resize';
-    else if (Math.abs(lx) <= selOv.box.w / 2 && Math.abs(ly) <= selOv.box.h / 2) cur = 'move';
-  }
-  canvas.style.cursor = cur;
+canvas.addEventListener('pointermove',e=>{
+  if(e.buttons||ui.exporting)return;
+  const r=canvas.getBoundingClientRect(),hit=previewHit((e.clientX-r.left)*canvas.width/r.width,(e.clientY-r.top)*canvas.height/r.height);
+  canvas.style.cursor=hit?(hit.mode==='resize'?'nwse-resize':'move'):'';
 });
 
 // ------------------------------------------------------------------ timeline
@@ -826,7 +874,7 @@ function renderRuler(width) {
 }
 
 function clipHTML(track, c, start, dur, top = null) {
-  const sel = ui.sel && ui.sel.track === track && ui.sel.id === c.id;
+  const sel = (ui.sel && ui.sel.track === track && ui.sel.id === c.id)||(ui.subtitleGroup&&track==='text'&&c.subtitleSource);
   const cls = `clip ${track}${c.detachedFrom ? ' detached' : ''}${sel ? ' sel' : ''}`;
   const style = `left:${start * ui.zoom}px;width:${Math.max(4, dur * ui.zoom)}px${top != null ? `;top:${top + 5}px;height:${TRACK_H - 10}px;bottom:auto` : ''}`;
   let inner = '', bg = '';
@@ -835,7 +883,7 @@ function clipHTML(track, c, start, dur, top = null) {
     if (m?.thumb) bg = `;background-image:url('${m.thumb}')`;
     const badges = [];
     if (speedLabel(c)) badges.push(speedLabel(c));
-    if (m?.type === 'image') badges.push('Ảnh');
+    if (m?.type === 'image') badges.push(tr('Ảnh'));
     if ((c.volume ?? 1) === 0 && m?.type === 'video') badges.push('🔇');
     if (track === 'overlay') badges.unshift('PiP');
     inner = `<div class="clabel">${esc(m?.name || '?')}</div>${badges.length ? `<div class="cbadge">${badges.join(' · ')}</div>` : ''}`;
@@ -859,7 +907,9 @@ function renderTimeline() {
   const ovEl = trackEl('overlay');
   ovEl.style.height = $('.tl-head[data-track="overlay"]').style.height = n * TRACK_H + 'px';
   ovEl.innerHTML = P.tracks.overlay.map(c => clipHTML('overlay', c, c.start, ovDur(c), (n - 1 - rowOf.get(c.id)) * TRACK_H)).join('');
-  trackEl('text').innerHTML = P.tracks.text.map(c => clipHTML('text', c, c.start, c.duration)).join('');
+  const textRows=overlayRows('text'),textEl=trackEl('text');
+  textEl.style.height=$('.tl-head[data-track="text"]').style.height=textRows.n*TRACK_H+'px';
+  textEl.innerHTML=P.tracks.text.map(c=>clipHTML('text',c,c.start,c.duration,(textRows.n-1-textRows.rowOf.get(c.id))*TRACK_H)).join('');
   renderTrackToggles();
   trackEl('audio').innerHTML = P.tracks.audio.map(c => clipHTML('audio', c, c.start, audDur(c))).join('');
   $('#timeTotal').textContent = fmt(total);
@@ -872,7 +922,7 @@ function renderTrackToggles() {
       const b = head.querySelector(`[data-toggle-track="${k}"]`), off = !!P.trackState[t][k];
       b.classList.toggle('off', off);
       b.textContent = k === 'hidden' ? (off ? '🚫' : '👁') : (off ? '🔇' : '🔊');
-      b.title = k === 'hidden' ? (off ? 'Đang ẩn — bấm để hiện' : 'Ẩn hình của track này') : (off ? 'Đang tắt tiếng — bấm để bật' : 'Tắt tiếng track này');
+      b.title = k === 'hidden' ? (off ? tr('Đang ẩn — bấm để hiện') : tr('Ẩn hình của track này')) : (off ? tr('Đang tắt tiếng — bấm để bật') : tr('Tắt tiếng track này'));
     }
     trackEl(t).classList.toggle('track-hidden', trackHidden(t));
     trackEl(t).classList.toggle('track-muted', trackMuted(t));
@@ -884,7 +934,7 @@ document.querySelector('.tl-heads').addEventListener('click', e => {
   const t = b.closest('.tl-head').dataset.track, k = b.dataset.toggleTrack;
   commit();
   P.trackState[t][k] = !P.trackState[t][k];
-  toast(`${{ text: 'Văn bản', overlay: 'Lớp phủ', main: 'Video chính', audio: 'Âm thanh' }[t]}: ${k === 'hidden' ? (P.trackState[t][k] ? 'đã ẩn hình' : 'đã hiện hình') : (P.trackState[t][k] ? 'đã tắt tiếng' : 'đã bật tiếng')}`);
+  toast(`${{ text: tr('Văn bản'), overlay: tr('Lớp phủ'), main: tr('Video chính'), audio: tr('Âm thanh') }[t]}: ${k === 'hidden' ? (P.trackState[t][k] ? tr('đã ẩn hình') : tr('đã hiện hình')) : (P.trackState[t][k] ? tr('đã tắt tiếng') : tr('đã bật tiếng'))}`);
   changed(false);
 });
 function updatePlayheadUI() {
@@ -1100,7 +1150,7 @@ function splitAtPlayhead() {
   let target = ui.sel ? { track: ui.sel.track, c: findClip(ui.sel.track, ui.sel.id) } : null;
   if (target) { const [s, e] = clipRange(target.track, target.c); if (!(t > s + 0.05 && t < e - 0.05)) target = null; }
   if (!target) { const a = activeMain(t); if (a && t > a.start + 0.05 && t < a.start + a.dur - 0.05) target = { track: 'main', c: a.c }; }
-  if (!target) return toast('Đặt đầu phát vào giữa một clip để tách');
+  if (!target) return toast(tr('Đặt đầu phát vào giữa một clip để tách'));
   commit();
   const { track, c } = target;
   const [s] = clipRange(track, c); const local = t - s;
@@ -1134,9 +1184,14 @@ const extracting = new Map(); // mediaId video -> Promise (tránh tách trùng k
 async function ensureMp3(m) {
   const exist = P.media.find(x => x.sourceOf === m.id);
   if (exist) return { media: exist, created: false };
+  let serverMedia=m;
+  if (m.localId) {
+    if (!confirm(tr('Tác vụ này cần gửi video lên server, lưu tạm 24 giờ. Tiếp tục?'))) throw new DOMException('Cancelled','AbortError');
+    serverMedia=await DeviceMedia.upload(m);
+  }
   if (!extracting.has(m.id)) {
     extracting.set(m.id, api('/api/extract-audio', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: m.file, name: m.name }) }).finally(() => extracting.delete(m.id)));
+      body: JSON.stringify({ file: serverMedia.file, name: m.name, temporary:!!m.localId }) }).finally(() => extracting.delete(m.id)));
   }
   const r = await extracting.get(m.id);
   const again = P.media.find(x => x.sourceOf === m.id);
@@ -1151,18 +1206,25 @@ async function ensureMp3(m) {
 const detaching = new Set(); // clip đang tách (chặn bấm nhiều lần)
 async function detachAudio(c) {
   const m = c && mediaById(c.mediaId);
-  if (!m || m.type !== 'video' || !m.hasAudio) return toast('Clip này không có âm thanh');
+  if (!m || m.type !== 'video' || !m.hasAudio) return toast(tr('Clip này không có âm thanh'));
+  if (m.localId) {
+    if (P.tracks.audio.some(a=>a.detachedFrom===c.id)) return;
+    commit(); const track=ui.sel?.track || 'main', [start]=clipRange(track,c);
+    const audio={...makeAudioClip(m,start), in:c.in,out:c.out,speed:c.speed,curve:c.curve?structuredClone(c.curve):undefined,
+      keepPitch:c.keepPitch,volume:c.volume,fadeIn:c.fadeIn,fadeOut:c.fadeOut,detachedFrom:c.id};
+    P.tracks.audio.push(audio); c.volume=0; ui.sel={track:'audio',id:audio.id}; changed(); return;
+  }
   const done = () => (c.volume ?? 1) === 0 && P.tracks.audio.some(a => a.detachedFrom === c.id);
-  if (done()) return toast('Clip này đã được tách âm thanh rồi');
-  if (detaching.has(c.id)) return toast('Đang tách âm thanh, chờ chút…');
+  if (done()) return toast(tr('Clip này đã được tách âm thanh rồi'));
+  if (detaching.has(c.id)) return toast(tr('Đang tách âm thanh, chờ chút…'));
   detaching.add(c.id);
-  toast('Đang tách âm thanh ra MP3…', 60000);
+  toast(tr('Đang tách âm thanh ra MP3…'), 60000);
   const before = JSON.stringify(P);
   let res;
-  try { res = await ensureMp3(m); } catch (e) { return toast('Lỗi tách âm thanh: ' + e.message, 5000); }
+  try { res = await ensureMp3(m); } catch (e) { return toast(tr('Lỗi tách âm thanh: ') + e.message, 5000); }
   finally { detaching.delete(c.id); }
   const ctrack = findClip('main', c.id) ? 'main' : findClip('overlay', c.id) ? 'overlay' : null;
-  if (!ctrack) { renderMedia(); return toast('Clip đã bị xóa trong lúc tách'); }
+  if (!ctrack) { renderMedia(); return toast(tr('Clip đã bị xóa trong lúc tách')); }
   if (done()) return;
   hist.undo.push(before); hist.redo.length = 0;
   const [start] = clipRange(ctrack, c);
@@ -1173,22 +1235,22 @@ async function detachAudio(c) {
   P.tracks.audio.push(a);
   ui.sel = { track: 'audio', id: a.id };
   changed();
-  toast(`Đã tách âm thanh → tạo file "${res.media.name}" trong thư viện`, 3500);
+  toast(`${tr("Đã tách âm thanh → tạo file \"")}${res.media.name}${tr("\" trong thư viện")}`, 3500);
 }
 
 // Nút MP3: tạo file MP3 cạnh video trong thư viện + cho tải về
 async function extractMp3(m) {
-  if (!m?.hasAudio) return toast('File này không có âm thanh');
-  toast('Đang tách âm thanh ra MP3…', 60000);
+  if (!m?.hasAudio) return toast(tr('File này không có âm thanh'));
+  toast(tr('Đang tách âm thanh ra MP3…'), 60000);
   try {
     const before = JSON.stringify(P);
     const { media, created } = await ensureMp3(m);
     if (created) { hist.undo.push(before); hist.redo.length = 0; changed(); }
-    toast(created ? 'Đã tạo file MP3 cạnh video trong thư viện' : 'File MP3 này đã có sẵn trong thư viện');
-    modal('Tách âm thanh (MP3)', `<div>✅ <b>${esc(media.name)}</b> đã nằm cạnh video trong thư viện Media.</div>
-      ${media.savedPath ? `<div class="dim" style="word-break:break-all;margin:6px 0 12px">Bản tải về: ${esc(media.savedPath)}</div>` : ''}
-      ${media.download ? `<a href="${media.download}" download><button class="primary">Tải MP3</button></a>` : ''}`);
-  } catch (e) { toast('Lỗi tách MP3: ' + e.message, 5000); }
+    toast(created ? tr('Đã tạo file MP3 cạnh video trong thư viện') : tr('File MP3 này đã có sẵn trong thư viện'));
+    modal(tr('Tách âm thanh (MP3)'), `<div>✅ <b data-user-content>${esc(media.name)}</b> ${tr("đã nằm cạnh video trong thư viện Media.")}</div>
+      ${media.savedPath ? `<div class="dim" style="word-break:break-all;margin:6px 0 12px">${tr("Bản tải về:")} ${esc(media.savedPath)}</div>` : ''}
+      ${media.download ? `<a href="${media.download}" download><button class="primary">${tr("Tải MP3")}</button></a>` : ''}`);
+  } catch (e) { toast(tr('Lỗi tách MP3: ') + e.message, 5000); }
 }
 // ------------------------------------------------------------------ tách beat (MR) bằng AI (Demucs ở server)
 const separating = new Map(); // mediaId -> đang tách
@@ -1197,21 +1259,21 @@ function findSeparated(m) {
   return mr && vocals ? { mr, vocals } : null;
 }
 async function askSeparate(m, after) {
-  if (!m?.hasAudio) return toast('File này không có âm thanh');
+  if (!m?.hasAudio) return toast(tr('File này không có âm thanh'));
   const ex = findSeparated(m);
   if (ex) { if (after) after(ex); else showSepResult(ex, false); return; }
-  if (separating.has(m.id)) return toast('Bài này đang được tách, chờ chút…');
+  if (separating.has(m.id)) return toast(tr('Bài này đang được tách, chờ chút…'));
   let ready = false;
   try { ready = (await api('/api/separate/ready')).ready; } catch { /* server lỗi -> coi như chưa sẵn sàng */ }
   if (!ready) {
-    return modal('Tách beat (MR)', `<div>Chưa cài bộ tách giọng hát bằng AI.</div>
-      <div class="dim" style="margin-top:8px">Chạy file <b>setup_mr.bat</b> trong thư mục cài app (cùng chỗ với <b>start.bat</b>)
-      (tải khoảng 2,5GB, chỉ làm một lần), rồi thử lại.</div>`);
+    return modal(tr('Tách beat (MR)'), `<div>${tr("Chưa cài bộ tách giọng hát bằng AI.")}</div>
+      <div class="dim" style="margin-top:8px">${tr("Chạy file")} <b>setup_mr.bat</b> ${tr("trong thư mục cài app (cùng chỗ với")} <b>start.bat</b>)
+      ${tr("(tải khoảng 2,5GB, chỉ làm một lần), rồi thử lại.")}</div>`);
   }
-  modal('Tách beat (MR) bằng AI', `<div>Tách giọng hát khỏi <b>${esc(m.name)}</b> → tạo <b>beat (MR)</b> và file <b>giọng hát</b> riêng.</div>
-    <div class="group-title">Chất lượng</div>
-    <div class="seg" id="sepQ"><button data-q="fast" class="on">Nhanh</button><button data-q="best">Chất lượng cao (chậm hơn ~4 lần)</button></div>
-    <div style="margin-top:14px;text-align:right"><button class="primary" id="sepGo">Bắt đầu tách</button></div>`);
+  modal(tr('Tách beat (MR) bằng AI'), `<div>${tr("Tách giọng hát khỏi")} <b data-user-content>${esc(m.name)}</b> ${tr("→ tạo")} <b>${tr("beat (MR)")}</b> ${tr("và file")} <b>${tr("giọng hát")}</b> ${tr("riêng.")}</div>
+    <div class="group-title">${tr("Chất lượng")}</div>
+    <div class="seg" id="sepQ"><button data-q="fast" class="on">${tr("Nhanh")}</button><button data-q="best">${tr("Chất lượng cao (chậm hơn ~4 lần)")}</button></div>
+    <div style="margin-top:14px;text-align:right"><button class="primary" id="sepGo">${tr("Bắt đầu tách")}</button></div>`);
   let q = 'fast';
   $('#sepQ').onclick = e => {
     const b = e.target.closest('button'); if (!b) return;
@@ -1220,19 +1282,24 @@ async function askSeparate(m, after) {
   $('#sepGo').onclick = () => runSeparate(m, q, after);
 }
 async function runSeparate(m, quality, after) {
+  let serverMedia=m;
+  if(m.localId) {
+    if(!confirm(tr('Tác vụ này cần gửi video lên server, lưu tạm 24 giờ. Tiếp tục?'))) return;
+    try {serverMedia=await DeviceMedia.upload(m);} catch(e){toast(e.message,5000);return;}
+  }
   separating.set(m.id, true);
-  modal('Tách beat (MR) bằng AI', `<div><b>${esc(m.name)}</b></div>
-    <div class="progress"><div id="sepBar"></div></div><div id="sepMsg" class="dim">Đang chuẩn bị…</div>
-    <div class="dim" style="margin-top:6px;font-size:11px">Có thể đóng cửa sổ này, việc tách vẫn chạy và sẽ báo khi xong.</div>
-    <div style="margin-top:12px;text-align:right"><button id="sepCancel">Hủy</button></div>`);
+  modal(tr('Tách beat (MR) bằng AI'), `<div><b data-user-content>${esc(m.name)}</b></div>
+    <div class="progress"><div id="sepBar"></div></div><div id="sepMsg" class="dim">${tr("Đang chuẩn bị…")}</div>
+    <div class="dim" style="margin-top:6px;font-size:11px">${tr("Có thể đóng cửa sổ này, việc tách vẫn chạy và sẽ báo khi xong.")}</div>
+    <div style="margin-top:12px;text-align:right"><button id="sepCancel">${tr("Hủy")}</button></div>`);
   const showErr = msg => {
     const el = $('#sepMsg');
     if (el && !$('#modal').classList.contains('hidden')) { el.innerHTML = `<div class="err">${esc(msg)}</div>`; $('#sepCancel')?.remove(); }
-    else toast('Tách beat lỗi: ' + msg, 6000);
+    else toast(tr('Tách beat lỗi: ') + msg, 6000);
   };
   try {
     const job = await api('/api/separate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: m.file, name: m.name, quality }) });
+      body: JSON.stringify({ file: serverMedia.file, name: m.name, quality, temporary:!!m.localId }) });
     $('#sepCancel').onclick = () => api(`/api/export/${job.jobId}/cancel`, { method: 'POST' }).catch(() => {});
     let s;
     for (;;) {
@@ -1242,15 +1309,15 @@ async function runSeparate(m, quality, after) {
       if (bar) { bar.style.width = (s.progress * 100).toFixed(1) + '%'; $('#sepMsg').textContent = `${s.message || ''} ${Math.round(s.progress * 100)}%`; }
       if (s.status !== 'running') break;
     }
-    if (s.status === 'cancelled') return showErr('Đã hủy');
-    if (s.status !== 'done') return showErr(s.error || 'Lỗi không rõ');
+    if (s.status === 'cancelled') return showErr(tr('Đã hủy'));
+    if (s.status !== 'done') return showErr(s.error || tr('Lỗi không rõ'));
     const before = JSON.stringify(P);
     const mr = { ...s.media[0], mrOf: m.id }, vocals = { ...s.media[1], vocalsOf: m.id };
     const i = P.media.findIndex(x => x.id === m.id);
     P.media.splice(i < 0 ? P.media.length : i + 1, 0, mr, vocals);
     hist.undo.push(before); hist.redo.length = 0;
     changed();
-    toast('Đã tách xong beat (MR) và giọng hát', 3500);
+    toast(tr('Đã tách xong beat (MR) và giọng hát'), 3500);
     const res = { mr, vocals };
     if (after) after(res);
     showSepResult(res, true);
@@ -1258,14 +1325,14 @@ async function runSeparate(m, quality, after) {
   finally { separating.delete(m.id); }
 }
 function showSepResult({ mr, vocals }, fresh) {
-  modal('Tách beat (MR)', `<div>✅ ${fresh ? 'Đã tạo' : 'Đã có sẵn'} 2 file nằm cạnh bài gốc trong thư viện Media:</div>
-    <div style="margin:10px 0;line-height:1.8">🎵 <b>${esc(mr.name)}</b><br>🎤 <b>${esc(vocals.name)}</b></div>
+  modal(tr('Tách beat (MR)'), `<div>✅ ${fresh ? tr('Đã tạo') : tr('Đã có sẵn')} ${tr("2 file nằm cạnh bài gốc trong thư viện Media:")}</div>
+    <div style="margin:10px 0;line-height:1.8">🎵 <b data-user-content>${esc(mr.name)}</b><br>🎤 <b data-user-content>${esc(vocals.name)}</b></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px">
-      <button class="primary" data-sep-add="${mr.id}">＋ Thêm MR vào timeline</button>
-      ${mr.download ? `<a href="${mr.download}" download><button>Tải MR</button></a>` : ''}
-      ${vocals.download ? `<a href="${vocals.download}" download><button>Tải giọng hát</button></a>` : ''}
+      <button class="primary" data-sep-add="${mr.id}">＋ ${tr("Thêm MR vào timeline")}</button>
+      ${mr.download ? `<a href="${mr.download}" download><button>${tr("Tải MR")}</button></a>` : ''}
+      ${vocals.download ? `<a href="${vocals.download}" download><button>${tr("Tải giọng hát")}</button></a>` : ''}
     </div>
-    ${mr.savedPath ? `<div class="dim" style="margin-top:10px;font-size:11px;word-break:break-all">Đã lưu: ${esc(mr.savedPath)}</div>` : ''}`);
+    ${mr.savedPath ? `<div class="dim" style="margin-top:10px;font-size:11px;word-break:break-all">${tr("Đã lưu:")} ${esc(mr.savedPath)}</div>` : ''}`);
 }
 $('#modalBody').addEventListener('click', e => {
   const b = e.target.closest('[data-sep-add]'); if (!b) return;
@@ -1285,7 +1352,7 @@ function sepForClip(track, c) {
       cur.volume = 0;
     }
     changed();
-    toast(track === 'audio' ? 'Clip đã chuyển sang beat (MR)' : 'Đã thay tiếng video bằng beat (MR) ở track Âm thanh', 3500);
+    toast(track === 'audio' ? tr('Clip đã chuyển sang beat (MR)') : tr('Đã thay tiếng video bằng beat (MR) ở track Âm thanh'), 3500);
   });
 }
 function deleteSelected() {
@@ -1335,7 +1402,7 @@ function curveSVG(c) {
   return `<svg id="curveEd" class="curve-ed" viewBox="0 0 ${CV.w} ${CV.h}">${grid}<path d="${d}" class="cv-line"/>${dots}</svg>`;
 }
 function speedInfo(c) {
-  return `Thời lượng: <b>${fmt(clipLen(c))}</b> (gốc ${fmt(c.out - c.in)})`;
+  return `${tr("Thời lượng:")} <b>${fmt(clipLen(c))}</b> (${tr("gốc")} ${fmt(c.out - c.in)})`;
 }
 function speedSection(c, isVideo) {
   if (ui.spSel !== c.id) { ui.spSel = c.id; ui.spTab = null; }
@@ -1344,22 +1411,22 @@ function speedSection(c, isVideo) {
   const slowest = Math.min(...speedSegs(c).map(g => g.s));
   let body;
   if (tab === 'normal') {
-    body = `${field('speedLog', 'Tốc độ', `<input type="range" data-k="speedLog" min="-1" max="1" step="0.005" value="${Math.log10(c.curve ? 1 : sp)}">`, c.curve ? '1x' : fmtSp(sp))}
+    body = `${field('speedLog', tr('Tốc độ'), `<input type="range" data-k="speedLog" min="-1" max="1" step="0.005" value="${Math.log10(c.curve ? 1 : sp)}">`, c.curve ? '1x' : fmtSp(sp))}
       <div class="sp-presets">${[0.1, 0.25, 0.5, 1, 1.5, 2, 3, 5, 10].map(v => `<button data-sp="${v}" class="${!c.curve && Math.abs(sp - v) < 1e-3 ? 'on' : ''}">${v}x</button>`).join('')}</div>`;
   } else {
-    body = `<div class="sp-presets curves"><button data-curve="none" class="${!c.curve ? 'on' : ''}">Không</button>${CURVES.map(cv => `<button data-curve="${cv.id}" class="${c.curve?.id === cv.id ? 'on' : ''}">${cv.name}</button>`).join('')}</div>
-      ${c.curve ? `${curveSVG(c)}<div class="info">Kéo điểm để đổi tốc độ · nhấp đúp vào đường để thêm điểm · nhấp đúp vào điểm để xóa</div>` : '<div class="info">Chọn một kiểu đường cong để tăng/giảm tốc độ trong clip (speed ramp).</div>'}`;
+    body = `<div class="sp-presets curves"><button data-curve="none" class="${!c.curve ? 'on' : ''}">${tr("Không")}</button>${CURVES.map(cv => `<button data-curve="${cv.id}" class="${c.curve?.id === cv.id ? 'on' : ''}">${tr(cv.name)}</button>`).join('')}</div>
+      ${c.curve ? `${curveSVG(c)}<div class="info">${tr("Kéo điểm để đổi tốc độ · nhấp đúp vào đường để thêm điểm · nhấp đúp vào điểm để xóa")}</div>` : `<div class="info">${tr("Chọn một kiểu đường cong để tăng/giảm tốc độ trong clip (speed ramp).")}</div>`}`;
   }
-  return `<div class="group-title">Tốc độ</div>
-    <div class="seg" style="margin-bottom:10px"><button data-sptab="normal" class="${tab === 'normal' ? 'on' : ''}">Bình thường</button><button data-sptab="curve" class="${tab === 'curve' ? 'on' : ''}">Đường cong</button></div>
+  return `<div class="group-title">${tr("Tốc độ")}</div>
+    <div class="seg" style="margin-bottom:10px"><button data-sptab="normal" class="${tab === 'normal' ? 'on' : ''}">${tr("Bình thường")}</button><button data-sptab="curve" class="${tab === 'curve' ? 'on' : ''}">${tr("Đường cong")}</button></div>
     ${body}
     <div class="info" id="spdInfo" style="margin:8px 0">${speedInfo(c)}</div>
-    <div class="seg" style="margin-bottom:8px"><button data-act="pitch" class="${c.keepPitch !== false ? 'on' : ''}" title="Giữ giọng nói không bị méo khi tua nhanh/chậm">${c.keepPitch !== false ? '✓ ' : ''}Giữ cao độ giọng</button></div>
-    ${isVideo ? `<div class="field"><label>Slow motion mượt (khi xuất)</label><div class="seg">
-      <button data-smooth="none" class="${!c.smooth || c.smooth === 'none' ? 'on' : ''}">Tắt</button>
-      <button data-smooth="blend" class="${c.smooth === 'blend' ? 'on' : ''}" title="Trộn các khung hình liền kề — nhanh">Trộn khung</button>
-      <button data-smooth="flow" class="${c.smooth === 'flow' ? 'on' : ''}" title="Nội suy chuyển động tạo khung hình mới — mượt nhất, xuất chậm">Nội suy</button></div>
-      <div class="info" style="margin-top:4px">${slowest < 0.999 ? 'Áp dụng cho đoạn chạy chậm hơn 1x. "Nội suy" mượt nhất nhưng xuất video lâu hơn nhiều.' : 'Chỉ có tác dụng khi clip chạy chậm hơn 1x.'}</div></div>` : ''}`;
+    <div class="seg" style="margin-bottom:8px"><button data-act="pitch" class="${c.keepPitch !== false ? 'on' : ''}" title="${tr("Giữ giọng nói không bị méo khi tua nhanh/chậm")}">${c.keepPitch !== false ? '✓ ' : ''}${tr("Giữ cao độ giọng")}</button></div>
+    ${isVideo ? `<div class="field"><label>${tr("Slow motion mượt (khi xuất)")}</label><div class="seg">
+      <button data-smooth="none" class="${!c.smooth || c.smooth === 'none' ? 'on' : ''}">${tr("Tắt")}</button>
+      <button data-smooth="blend" class="${c.smooth === 'blend' ? 'on' : ''}" title="${tr("Trộn các khung hình liền kề — nhanh")}">${tr("Trộn khung")}</button>
+      <button data-smooth="flow" class="${c.smooth === 'flow' ? 'on' : ''}" title="${tr("Nội suy chuyển động tạo khung hình mới — mượt nhất, xuất chậm")}">${tr("Nội suy")}</button></div>
+      <div class="info" style="margin-top:4px">${slowest < 0.999 ? tr('Áp dụng cho đoạn chạy chậm hơn 1x. "Nội suy" mượt nhất nhưng xuất video lâu hơn nhiều.') : tr('Chỉ có tác dụng khi clip chạy chậm hơn 1x.')}</div></div>` : ''}`;
 }
 function refreshSpeedUI(c) { // vẽ lại đồ thị + thời lượng khi đang kéo, không dựng lại cả panel
   const svg = $('#curveEd'); if (svg && c.curve) svg.outerHTML = curveSVG(c);
@@ -1380,9 +1447,9 @@ $('#props').addEventListener('pointerdown', e => {
     let sp = cvS(y); if (Math.abs(Math.log10(sp)) < 0.02) sp = 1; // hít vào 1x
     pts[i][1] = +sp.toFixed(3);
     if (i > 0 && i < last) pts[i][0] = clamp(cvU(x), pts[i - 1][0] + 0.02, pts[i + 1][0] - 0.02);
-    c.curve.id = 'custom'; c.curve.name = 'Tùy chỉnh';
+    c.curve.id = 'custom'; c.curve.name = tr('Tùy chỉnh');
     refreshSpeedUI(c);
-    const inf = $('#spdInfo'); if (inf) inf.innerHTML = `Điểm: <b>${fmtSp(sp)}</b> · ` + speedInfo(c);
+    const inf = $('#spdInfo'); if (inf) inf.innerHTML = `${tr("Điểm:")} <b>${fmtSp(sp)}</b> · ` + speedInfo(c);
   };
   const up = () => {
     window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
@@ -1404,102 +1471,110 @@ $('#props').addEventListener('dblclick', e => {
     const at = pts.findIndex(p => p[0] > u); if (at <= 0) { hist.undo.pop(); return; }
     pts.splice(at, 0, [u, sp]);
   }
-  c.curve = { ...c.curve, id: 'custom', name: 'Tùy chỉnh', pts };
+  c.curve = { ...c.curve, id: 'custom', name: tr('Tùy chỉnh'), pts };
   changed();
 });
 
 function renderProps() {
   const box = $('#props');
   if (!ui.sel) {
-    $('#propTitle').textContent = 'Dự án';
+    $('#propTitle').textContent = tr('Dự án');
     box.innerHTML = `
-      ${field('ratio', 'Tỉ lệ khung hình', `<div class="seg">${Object.keys(RATIOS).map(k => `<button data-ratio="${k}" class="${P.ratio === k ? 'on' : ''}">${k}</button>`).join('')}</div>`)}
+      ${field('ratio', tr('Tỉ lệ khung hình'), `<div class="seg">${Object.keys(RATIOS).map(k => `<button data-ratio="${k}" class="${P.ratio === k ? 'on' : ''}">${k}</button>`).join('')}</div>`)}
       ${field('fps', 'FPS', `<select data-k="fps">${[24, 25, 30, 60].map(f => `<option ${P.fps === f ? 'selected' : ''}>${f}</option>`).join('')}</select>`)}
-      <div class="info">Kích thước xuất: ${P.width}×${P.height}<br>Thời lượng: ${fmt(totalDuration())}<br>Bộ lọc: ${activeFilter() ? `${esc(activeFilter().name)} (${Math.round(P.filter.intensity * 100)}%)` : 'không'}</div>
-      <div class="group-title">Phím tắt</div>
-      <div class="info">Space phát/dừng · S tách · Delete xóa · Ctrl+D nhân bản · Ctrl+Z/Y hoàn tác · ←/→ lùi/tiến 1 frame (Shift: 1 giây) · Ctrl+cuộn: zoom timeline · Kéo chữ / lớp phủ trực tiếp trên khung preview (kéo ô góc để đổi cỡ PiP)</div>`;
+      <div class="field"><label>${tr('Nơi xử lý')}</label><select id="exportMode">
+        ${[['auto','Tự động'],['device','Xuất trên thiết bị'],['server','Xuất bằng server']].map(([value,label])=>`<option value="${value}" ${exportMode===value?'selected':''}>${tr(label)}</option>`).join('')}
+      </select></div>
+      <div class="info">${tr("Kích thước xuất:")} ${P.width}×${P.height}<br>${tr("Thời lượng:")} ${fmt(totalDuration())}<br>${tr("Bộ lọc:")} ${activeFilter() ? `${esc(tr(activeFilter().name))} (${Math.round(P.filter.intensity * 100)}%)` : tr('không')}</div>
+      <div class="group-title">${tr("Phím tắt")}</div>
+      <div class="info">${tr("Space phát/dừng · S tách · Delete xóa · Ctrl+D nhân bản · Ctrl+Z/Y hoàn tác · ←/→ lùi/tiến 1 frame (Shift: 1 giây) · Ctrl+cuộn: zoom timeline · Kéo chữ / lớp phủ trực tiếp trên khung preview (kéo ô góc để đổi cỡ PiP)")}</div>`;
     return;
   }
   const { track } = ui.sel; const c = findClip(track, ui.sel.id);
   if (track === 'main') {
     const m = mediaById(c.mediaId); const img = m.type === 'image';
-    $('#propTitle').textContent = img ? 'Ảnh' : 'Video';
+    $('#propTitle').textContent = img ? tr('Ảnh') : tr('Video');
     box.innerHTML = `
-      <div class="info">${esc(m.name)}<br>${m.width}×${m.height}${img ? '' : ' · gốc ' + fmt(m.duration)}</div>
-      <div class="group-title">Thời lượng</div>
-      ${img ? field('dur', 'Thời lượng (giây)', num('dur', 0.1, 600, 0.1, c.out - c.in))
-        : `<div class="row">${field('in', 'Bắt đầu (giây)', num('in', 0, m.duration, 0.01, c.in))}${field('out', 'Kết thúc (giây)', num('out', 0, m.duration, 0.01, c.out))}</div>
-           ${field('volume', 'Âm lượng', range('volume', 0, 2, 0.05, c.volume), Math.round(c.volume * 100) + '%')}
+      <div class="info">${esc(m.name)}<br>${m.width}×${m.height}${img ? '' : tr(' · gốc ') + fmt(m.duration)}</div>
+      <div class="group-title">${tr("Thời lượng")}</div>
+      ${img ? field('dur', tr('Thời lượng (giây)'), num('dur', 0.1, 600, 0.1, c.out - c.in))
+        : `<div class="row">${field('in', tr('Bắt đầu (giây)'), num('in', 0, m.duration, 0.01, c.in))}${field('out', tr('Kết thúc (giây)'), num('out', 0, m.duration, 0.01, c.out))}</div>
+           ${field('volume', tr('Âm lượng'), range('volume', 0, 2, 0.05, c.volume), Math.round(c.volume * 100) + '%')}
            ${speedSection(c, true)}`}
-      ${field('fit', 'Khung hình', `<div class="seg"><button data-fit="contain" class="${c.fit !== 'cover' ? 'on' : ''}">Vừa khung</button><button data-fit="cover" class="${c.fit === 'cover' ? 'on' : ''}">Lấp đầy</button></div>`)}
-      <div class="group-title">Điều chỉnh màu</div>
-      ${field('brightness', 'Độ sáng', range('brightness', -100, 100, 1, c.brightness), c.brightness)}
-      ${field('contrast', 'Tương phản', range('contrast', -100, 100, 1, c.contrast), c.contrast)}
-      ${field('saturation', 'Bão hòa', range('saturation', -100, 100, 1, c.saturation), c.saturation)}
-      <div class="group-title">Hiệu ứng</div>
-      <div class="row">${field('fadeIn', 'Mờ vào (s)', num('fadeIn', 0, 5, 0.1, c.fadeIn))}${field('fadeOut', 'Mờ ra (s)', num('fadeOut', 0, 5, 0.1, c.fadeOut))}</div>
-      <button data-act="reset">Đặt lại màu & hiệu ứng</button>
-      ${!img && m.hasAudio ? `<div class="group-title">Âm thanh</div>
-        <button data-act="detach" class="primary" style="width:100%">♪ Tách âm thanh</button>
-        <div class="info" style="margin-top:6px">Tiếng sẽ chuyển xuống track Âm thanh để chỉnh riêng; clip video bị tắt tiếng.</div>
-        <button data-act="mp3" style="width:100%;margin-top:8px">Tải riêng tiếng (MP3)</button>
-        <button data-act="sep" style="width:100%;margin-top:8px">🎤 Tách beat (MR) – bỏ giọng hát</button>` : ''}`;
+      ${field('fit', tr('Khung hình'), `<div class="seg"><button data-fit="contain" class="${c.fit !== 'cover' ? 'on' : ''}">${tr("Vừa khung")}</button><button data-fit="cover" class="${c.fit === 'cover' ? 'on' : ''}">${tr("Lấp đầy")}</button></div>`)}
+      ${field('scale',tr('Kích thước'),range('scale',0.05,3,0.01,c.scale??1),Math.round((c.scale??1)*100)+'%')}
+      <button data-act="mainReset">${tr("Vừa khung")}</button>
+      <div class="group-title">${tr("Điều chỉnh màu")}</div>
+      ${field('brightness', tr('Độ sáng'), range('brightness', -100, 100, 1, c.brightness), c.brightness)}
+      ${field('contrast', tr('Tương phản'), range('contrast', -100, 100, 1, c.contrast), c.contrast)}
+      ${field('saturation', tr('Bão hòa'), range('saturation', -100, 100, 1, c.saturation), c.saturation)}
+      <div class="group-title">${tr("Hiệu ứng")}</div>
+      <div class="row">${field('fadeIn', tr('Mờ vào (s)'), num('fadeIn', 0, 5, 0.1, c.fadeIn))}${field('fadeOut', tr('Mờ ra (s)'), num('fadeOut', 0, 5, 0.1, c.fadeOut))}</div>
+      <button data-act="reset">${tr("Đặt lại màu & hiệu ứng")}</button>
+      ${!img && m.hasAudio ? `<div class="group-title">${tr("Âm thanh")}</div>
+        <button data-act="detach" class="primary" style="width:100%">♪ ${tr("Tách âm thanh")}</button>
+        <div class="info" style="margin-top:6px">${tr("Tiếng sẽ chuyển xuống track Âm thanh để chỉnh riêng; clip video bị tắt tiếng.")}</div>
+        <button data-act="mp3" style="width:100%;margin-top:8px">${tr("Tải riêng tiếng (MP3)")}</button>
+        <button data-act="sep" style="width:100%;margin-top:8px">🎤 ${tr("Tách beat (MR) – bỏ giọng hát")}</button>` : ''}`;
   } else if (track === 'overlay') {
     const m = mediaById(c.mediaId); const img = m.type === 'image';
-    $('#propTitle').textContent = 'Lớp phủ (PiP)';
+    $('#propTitle').textContent = tr('Lớp phủ (PiP)');
     box.innerHTML = `
-      <div class="info">${esc(m.name)} · ${m.width}×${m.height}<br>Kéo trên khung xem trước để di chuyển, kéo ô vuông ở góc để đổi cỡ.</div>
-      <div class="group-title">Vị trí & kích thước</div>
-      ${field('scale', 'Kích thước', range('scale', 0.05, 2, 0.01, c.scale), Math.round(c.scale * 100) + '%')}
-      ${field('x', 'Ngang', range('x', -0.5, 1.5, 0.005, c.x), Math.round(c.x * 100) + '%')}
-      ${field('y', 'Dọc', range('y', -0.5, 1.5, 0.005, c.y), Math.round(c.y * 100) + '%')}
-      ${field('rotation', 'Xoay', range('rotation', -180, 180, 1, c.rotation || 0), (c.rotation || 0) + '°')}
-      ${field('opacity', 'Độ trong suốt', range('opacity', 0, 1, 0.01, c.opacity ?? 1), Math.round((c.opacity ?? 1) * 100) + '%')}
-      <div class="seg" style="margin-bottom:8px"><button data-act="ovFull">Toàn khung</button><button data-act="ovReset">Góc phải trên</button></div>
-      <div class="seg" style="margin-bottom:12px"><button data-act="ovUp">⬆ Lớp trên</button><button data-act="ovDown">⬇ Lớp dưới</button></div>
-      <div class="group-title">Thời gian</div>
-      ${field('start', 'Bắt đầu trên timeline (s)', num('start', 0, 36000, 0.1, c.start))}
-      ${img ? field('dur', 'Thời lượng (giây)', num('dur', 0.1, 600, 0.1, c.out - c.in))
-        : `<div class="row">${field('in', 'Cắt đầu (s)', num('in', 0, m.duration, 0.01, c.in))}${field('out', 'Cắt cuối (s)', num('out', 0, m.duration, 0.01, c.out))}</div>
-           ${field('volume', 'Âm lượng', range('volume', 0, 2, 0.05, c.volume ?? 1), Math.round((c.volume ?? 1) * 100) + '%')}
+      <div class="info">${esc(m.name)} · ${m.width}×${m.height}<br>${tr("Kéo trên khung xem trước để di chuyển, kéo ô vuông ở góc để đổi cỡ.")}</div>
+      <div class="group-title">${tr("Vị trí & kích thước")}</div>
+      ${field('scale', tr('Kích thước'), range('scale', 0.05, 2, 0.01, c.scale), Math.round(c.scale * 100) + '%')}
+      ${field('x', tr('Ngang'), range('x', -0.5, 1.5, 0.005, c.x), Math.round(c.x * 100) + '%')}
+      ${field('y', tr('Dọc'), range('y', -0.5, 1.5, 0.005, c.y), Math.round(c.y * 100) + '%')}
+      ${field('rotation', tr('Xoay'), range('rotation', -180, 180, 1, c.rotation || 0), (c.rotation || 0) + '°')}
+      ${field('opacity', tr('Độ trong suốt'), range('opacity', 0, 1, 0.01, c.opacity ?? 1), Math.round((c.opacity ?? 1) * 100) + '%')}
+      <div class="seg" style="margin-bottom:8px"><button data-act="ovFull">${tr("Toàn khung")}</button><button data-act="ovReset">${tr("Góc phải trên")}</button></div>
+      <div class="seg" style="margin-bottom:12px"><button data-act="ovUp">⬆ ${tr("Lớp trên")}</button><button data-act="ovDown">⬇ ${tr("Lớp dưới")}</button></div>
+      <div class="group-title">${tr("Thời gian")}</div>
+      ${field('start', tr('Bắt đầu trên timeline (s)'), num('start', 0, 36000, 0.1, c.start))}
+      ${img ? field('dur', tr('Thời lượng (giây)'), num('dur', 0.1, 600, 0.1, c.out - c.in))
+        : `<div class="row">${field('in', tr('Cắt đầu (s)'), num('in', 0, m.duration, 0.01, c.in))}${field('out', tr('Cắt cuối (s)'), num('out', 0, m.duration, 0.01, c.out))}</div>
+           ${field('volume', tr('Âm lượng'), range('volume', 0, 2, 0.05, c.volume ?? 1), Math.round((c.volume ?? 1) * 100) + '%')}
            ${speedSection(c, true)}`}
-      <div class="group-title">Điều chỉnh màu</div>
-      ${field('brightness', 'Độ sáng', range('brightness', -100, 100, 1, c.brightness || 0), c.brightness || 0)}
-      ${field('contrast', 'Tương phản', range('contrast', -100, 100, 1, c.contrast || 0), c.contrast || 0)}
-      ${field('saturation', 'Bão hòa', range('saturation', -100, 100, 1, c.saturation || 0), c.saturation || 0)}
-      <div class="row">${field('fadeIn', 'Mờ vào (s)', num('fadeIn', 0, 5, 0.1, c.fadeIn || 0))}${field('fadeOut', 'Mờ ra (s)', num('fadeOut', 0, 5, 0.1, c.fadeOut || 0))}</div>
-      <button data-act="reset">Đặt lại màu & hiệu ứng</button>
-      ${!img && m.hasAudio ? `<div class="group-title">Âm thanh</div>
-        <button data-act="detach" class="primary" style="width:100%">♪ Tách âm thanh</button>
-        <button data-act="sep" style="width:100%;margin-top:8px">🎤 Tách beat (MR) – bỏ giọng hát</button>` : ''}`;
+      <div class="group-title">${tr("Điều chỉnh màu")}</div>
+      ${field('brightness', tr('Độ sáng'), range('brightness', -100, 100, 1, c.brightness || 0), c.brightness || 0)}
+      ${field('contrast', tr('Tương phản'), range('contrast', -100, 100, 1, c.contrast || 0), c.contrast || 0)}
+      ${field('saturation', tr('Bão hòa'), range('saturation', -100, 100, 1, c.saturation || 0), c.saturation || 0)}
+      <div class="row">${field('fadeIn', tr('Mờ vào (s)'), num('fadeIn', 0, 5, 0.1, c.fadeIn || 0))}${field('fadeOut', tr('Mờ ra (s)'), num('fadeOut', 0, 5, 0.1, c.fadeOut || 0))}</div>
+      <button data-act="reset">${tr("Đặt lại màu & hiệu ứng")}</button>
+      ${!img && m.hasAudio ? `<div class="group-title">${tr("Âm thanh")}</div>
+        <button data-act="detach" class="primary" style="width:100%">♪ ${tr("Tách âm thanh")}</button>
+        <button data-act="sep" style="width:100%;margin-top:8px">🎤 ${tr("Tách beat (MR) – bỏ giọng hát")}</button>` : ''}`;
   } else if (track === 'text') {
-    $('#propTitle').textContent = 'Văn bản';
+    $('#propTitle').textContent = tr('Văn bản');
     box.innerHTML = `
-      ${field('text', 'Nội dung', `<textarea data-k="text">${esc(c.text)}</textarea>`)}
-      <div class="row">${field('font', 'Phông', `<select data-k="font">${FONTS.map(f => `<option ${c.font === f ? 'selected' : ''}>${f}</option>`).join('')}</select>`)}
-        ${field('color', 'Màu', `<input type="color" data-k="color" value="${c.color}">`)}</div>
-      ${field('fontSize', 'Cỡ chữ', range('fontSize', 16, 300, 1, c.fontSize), c.fontSize)}
-      <div class="seg" style="margin-bottom:12px"><button data-toggle="bold" class="${c.bold ? 'on' : ''}"><b>B</b> Đậm</button><button data-toggle="bg" class="${c.bg ? 'on' : ''}">▇ Nền</button></div>
-      <div class="row">${field('strokeWidth', 'Viền', range('strokeWidth', 0, 20, 1, c.strokeWidth), c.strokeWidth)}
-        ${field('strokeColor', 'Màu viền', `<input type="color" data-k="strokeColor" value="${c.strokeColor}">`)}</div>
-      ${c.bg ? field('bgColor', 'Màu nền', `<input type="color" data-k="bgColor" value="${c.bgColor.slice(0, 7)}">`) : ''}
-      <div class="group-title">Vị trí & thời gian</div>
-      ${field('x', 'Ngang', range('x', 0, 1, 0.005, c.x), Math.round(c.x * 100) + '%')}
-      ${field('y', 'Dọc', range('y', 0, 1, 0.005, c.y), Math.round(c.y * 100) + '%')}
-      <div class="row">${field('start', 'Bắt đầu (s)', num('start', 0, 36000, 0.1, c.start))}${field('duration', 'Thời lượng (s)', num('duration', 0.1, 36000, 0.1, c.duration))}</div>`;
+      ${field('text', tr('Nội dung'), `<textarea data-k="text">${esc(c.text)}</textarea>`)}
+      <div class="group-title">${tr('Lớp chữ')}</div>
+      <div class="text-layer-actions"><button data-text-layer="up">↑ ${tr('Lớp trên')}</button><button data-text-layer="down">↓ ${tr('Lớp dưới')}</button><button data-text-layer="front">⇈ ${tr('Trên cùng')}</button><button data-text-layer="back">⇊ ${tr('Dưới cùng')}</button></div>
+      ${textStyleButtons(c)}
+      <div class="row">${field('font', tr('Phông'), `<select data-k="font">${FONTS.map(f => `<option ${c.font === f ? 'selected' : ''}>${f}</option>`).join('')}</select>`)}
+        ${field('color', tr('Màu'), `<input type="color" data-k="color" value="${c.color}">`)}</div>
+      ${field('fontSize', tr('Cỡ chữ'), range('fontSize', 16, 300, 1, c.fontSize), c.fontSize)}
+      <div class="seg" style="margin-bottom:12px"><button data-toggle="bold" class="${c.bold ? 'on' : ''}"><b>B</b> ${tr("Đậm")}</button><button data-toggle="bg" class="${c.bg ? 'on' : ''}">▇ ${tr("Nền")}</button></div>
+      <div class="row">${field('strokeWidth', tr('Viền'), range('strokeWidth', 0, 20, 1, c.strokeWidth), c.strokeWidth)}
+        ${field('strokeColor', tr('Màu viền'), `<input type="color" data-k="strokeColor" value="${c.strokeColor}">`)}</div>
+      ${c.bg ? field('bgColor', tr('Màu nền'), `<input type="color" data-k="bgColor" value="${c.bgColor.slice(0, 7)}">`) : ''}
+      <div class="group-title">${tr("Vị trí & thời gian")}</div>
+      ${field('x', tr('Ngang'), range('x', 0, 1, 0.005, c.x), Math.round(c.x * 100) + '%')}
+      ${field('y', tr('Dọc'), range('y', 0, 1, 0.005, c.y), Math.round(c.y * 100) + '%')}
+      <div class="row">${field('start', tr('Bắt đầu (s)'), num('start', 0, 36000, 0.1, c.start))}${field('duration', tr('Thời lượng (s)'), num('duration', 0.1, 36000, 0.1, c.duration))}</div>`;
   } else {
     const m = mediaById(c.mediaId);
-    $('#propTitle').textContent = 'Âm thanh';
+    $('#propTitle').textContent = tr('Âm thanh');
     box.innerHTML = `
-      <div class="info">${esc(m.name)} · gốc ${fmt(m.duration)}${m.type === 'video' ? '<br>(chỉ lấy tiếng từ video)' : ''}</div>
-      ${field('volume', 'Âm lượng', range('volume', 0, 2, 0.05, c.volume), Math.round(c.volume * 100) + '%')}
+      <div class="info">${esc(m.name)} · ${tr("gốc")} ${fmt(m.duration)}${m.type === 'video' ? `<br>${tr("(chỉ lấy tiếng từ video)")}` : ''}</div>
+      ${field('volume', tr('Âm lượng'), range('volume', 0, 2, 0.05, c.volume), Math.round(c.volume * 100) + '%')}
       ${speedSection(c, false)}
-      <div class="row">${field('start', 'Vị trí (s)', num('start', 0, 36000, 0.1, c.start))}${field('in', 'Cắt đầu (s)', num('in', 0, m.duration, 0.1, c.in))}</div>
-      <div class="row">${field('fadeIn', 'Mờ vào (s)', num('fadeIn', 0, 10, 0.1, c.fadeIn))}${field('fadeOut', 'Mờ ra (s)', num('fadeOut', 0, 10, 0.1, c.fadeOut))}</div>
-      <div class="info">Âm lượng trên 100% chỉ có tác dụng khi xuất video.</div>
+      <div class="row">${field('start', tr('Vị trí (s)'), num('start', 0, 36000, 0.1, c.start))}${field('in', tr('Cắt đầu (s)'), num('in', 0, m.duration, 0.1, c.in))}</div>
+      <div class="row">${field('fadeIn', tr('Mờ vào (s)'), num('fadeIn', 0, 10, 0.1, c.fadeIn))}${field('fadeOut', tr('Mờ ra (s)'), num('fadeOut', 0, 10, 0.1, c.fadeOut))}</div>
+      <div class="info">${tr("Âm lượng trên 100% chỉ có tác dụng khi xuất video.")}</div>
       ${m.mrOf || m.vocalsOf ? '' : `<div class="group-title">Beat / MR</div>
-        <button data-act="sep" class="primary" style="width:100%">🎤 Tách beat (MR) – bỏ giọng hát</button>
-        <div class="info" style="margin-top:6px">AI tách giọng hát ra; clip này sẽ chuyển sang bản beat (MR). File giọng hát riêng cũng được lưu trong thư viện.</div>`}`;
+        <button data-act="sep" class="primary" style="width:100%">🎤 ${tr("Tách beat (MR) – bỏ giọng hát")}</button>
+        <div class="info" style="margin-top:6px">${tr("AI tách giọng hát ra; clip này sẽ chuyển sang bản beat (MR). File giọng hát riêng cũng được lưu trong thư viện.")}</div>`}`;
   }
 }
 
@@ -1512,6 +1587,10 @@ function applyProp(k, raw) {
   const m = c.mediaId ? mediaById(c.mediaId) : null;
   const v = typeof c[k] === 'string' || ['text', 'font', 'color', 'strokeColor', 'bgColor'].includes(k) ? raw : +raw;
   if (typeof v === 'number' && !Number.isFinite(v)) return;
+  if(ui.subtitleGroup&&track==='text'&&c.subtitleSource&&['font','fontSize','color','strokeWidth','strokeColor','bgColor','x','y'].includes(k)){
+    for(const cue of P.tracks.text.filter(c=>c.subtitleSource))cue[k]=k==='bgColor'?raw+'cc':v;
+    return;
+  }
   switch (k) {
     case 'dur': c.out = c.in + Math.max(MIN_CLIP, v); break;
     case 'in':
@@ -1549,6 +1628,24 @@ $('#props').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.ratio) { commit(); setRatio(b.dataset.ratio); return changed(); }
   const c = ui.sel && findClip(ui.sel.track, ui.sel.id); if (!c) return;
+  if(b.dataset.textLayer&&ui.sel.track==='text'){
+    const clips=P.tracks.text,selected=clip=>ui.subtitleGroup&&c.subtitleSource?!!clip.subtitleSource:clip.id===c.id;
+    commit();
+    if(b.dataset.textLayer==='front')P.tracks.text=[...clips.filter(c=>!selected(c)),...clips.filter(selected)];
+    else if(b.dataset.textLayer==='back')P.tracks.text=[...clips.filter(selected),...clips.filter(c=>!selected(c))];
+    else if(b.dataset.textLayer==='up'){
+      for(let i=clips.length-2;i>=0;i--)if(selected(clips[i])&&!selected(clips[i+1]))[clips[i],clips[i+1]]=[clips[i+1],clips[i]];
+    }else if(b.dataset.textLayer==='down'){
+      for(let i=1;i<clips.length;i++)if(selected(clips[i])&&!selected(clips[i-1]))[clips[i],clips[i-1]]=[clips[i-1],clips[i]];
+    }
+    changed();return;
+  }
+  if(b.dataset.textStyle){
+    const style=TEXT_STYLES.find(p=>p.id===b.dataset.textStyle);if(!style||ui.sel.track!=='text')return;
+    const {id,name,...values}=style;
+    const targets=ui.subtitleGroup&&c.subtitleSource?P.tracks.text.filter(c=>c.subtitleSource):[c];
+    commit();targets.forEach(clip=>Object.assign(clip,values,{textStyle:id}));changed();return;
+  }
   if (b.dataset.act === 'detach') return detachAudio(c);
   if (b.dataset.act === 'mp3') return extractMp3(mediaById(c.mediaId));
   if (b.dataset.act === 'sep') return sepForClip(ui.sel.track, c);
@@ -1561,8 +1658,11 @@ $('#props').addEventListener('click', e => {
   }
   if (b.dataset.act === 'pitch') c.keepPitch = c.keepPitch === false;
   if (b.dataset.smooth) c.smooth = b.dataset.smooth;
-  if (b.dataset.fit) c.fit = b.dataset.fit;
+  if (b.dataset.fit) {c.fit = b.dataset.fit;Object.assign(c,{x:0.5,y:0.5,scale:1});}
+  if(b.dataset.act==='mainReset')Object.assign(c,{x:0.5,y:0.5,scale:1});
   if (b.dataset.toggle) c[b.dataset.toggle] = !c[b.dataset.toggle];
+  if(ui.subtitleGroup&&ui.sel.track==='text'&&c.subtitleSource&&b.dataset.toggle)
+    for(const cue of P.tracks.text.filter(c=>c.subtitleSource))cue[b.dataset.toggle]=c[b.dataset.toggle];
   if (b.dataset.act === 'reset') Object.assign(c, { brightness: 0, contrast: 0, saturation: 0, fadeIn: 0, fadeOut: 0 });
   if (b.dataset.act === 'ovFull') Object.assign(c, { x: 0.5, y: 0.5, scale: 1, rotation: 0 });
   if (b.dataset.act === 'ovReset') Object.assign(c, { x: 0.72, y: 0.28, scale: 0.4, rotation: 0 });
@@ -1574,7 +1674,65 @@ $('#props').addEventListener('click', e => {
 });
 
 // ------------------------------------------------------------------ project / export
-$('#projName').addEventListener('change', e => { commit(); P.name = e.target.value.trim() || 'Dự án mới'; changed(false); });
+let exportMode='auto';
+try {const mode=localStorage.getItem('vedit.exportMode'); if(['auto','device','server'].includes(mode)) exportMode=mode;} catch {}
+$('#props').addEventListener('change',e=>{
+  if(e.target.id==='exportMode') {exportMode=e.target.value; try{localStorage.setItem('vedit.exportMode',exportMode);}catch{}}
+});
+async function restoreDeviceMedia() {
+  const missing=await DeviceMedia.restore(P.media);
+  for(const v of videos.values()){v.pause();v.remove();} videos.clear(); images.clear();
+  for(const a of audios.values())a.pause(); audios.clear();
+  if(missing.length) toast(tr('Thiếu file trên thiết bị. Hãy nhập lại file gốc.'),7000);
+}
+function deviceClips() {
+  const clips=[];
+  for(const l of mainLayout()) clips.push({clip:l.c,media:mediaById(l.c.mediaId),start:l.start,duration:l.dur,
+    key:'main:'+l.c.id,visual:!trackHidden('main'),muted:trackMuted('main')});
+  for(const c of P.tracks.overlay) clips.push({clip:c,media:mediaById(c.mediaId),start:c.start,duration:ovDur(c),
+    key:'ov:'+c.id,visual:!trackHidden('overlay'),muted:trackMuted('overlay')});
+  for(const c of P.tracks.audio) clips.push({clip:c,media:mediaById(c.mediaId),start:c.start,duration:audDur(c),
+    key:'audio:'+c.id,visual:false,muted:trackMuted('audio')});
+  return clips;
+}
+const deviceError = e=>tr(({missingLocal:'Thiếu file trên thiết bị. Hãy nhập lại file gốc.',
+  browserUnsupported:'Trình duyệt không hỗ trợ xuất video này.',advancedExport:'Hiệu ứng này cần xuất bằng server để giữ đúng kết quả.',
+  largeExport:'Dự án quá lớn để xuất an toàn trên trình duyệt này.',frameMissing:'Không đọc được file trong trình duyệt. Thử đổi sang MP4 H.264/AAC.'})[e.message]||e.message);
+async function loadProjectFonts(){
+  await Promise.all(P.tracks.text.map(c=>document.fonts.load(`${c.bold?700:400} ${c.fontSize||60}px "${c.font||'Arial'}"`,c.text||'한글')));
+}
+document.fonts.addEventListener('loadingdone',()=>{ui.dirty=true;});
+async function exportVideo() {
+  await loadProjectFonts();
+  if(ui.exporting) return;
+  if(uploading.size) return toast(tr('Đang đọc file trên thiết bị…'));
+  const phone=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.maxTouchPoints>1&&/Macintosh/i.test(navigator.userAgent));
+  if(exportMode==='server'||(exportMode==='auto'&&phone)) return exportServerVideo();
+  const total=totalDuration(); if(total<=0.05)return toast(tr('Timeline đang trống'));
+  setPlaying(false); const controller=new AbortController(); ui.exporting=true;
+  modal(tr('Xuất trên thiết bị'),`<div>${tr('Đang xuất trên thiết bị…')}</div><div class="progress"><div id="deviceBar"></div></div>
+    <div id="deviceProgress">0%</div><div class="info">${tr('Giữ tab mở trong khi xuất.')}</div><button id="deviceCancel">${tr('Hủy')}</button>`);
+  modal.onClose=()=>controller.abort(); $('#deviceCancel').onclick=()=>controller.abort(); $('#modalClose').disabled=true;
+  document.body.classList.add('export-busy');
+  try {
+    const blob=await DeviceMedia.exportVideo({project:P,total,clips:deviceClips(),sourceTime:srcAt,fade:fadeFactor,canvas,
+      signal:controller.signal,renderFrame:(time,sources)=>{ui.exportFrames=sources;render(time);},
+      progress:value=>{ $('#deviceBar').style.width=(value*100).toFixed(1)+'%'; $('#deviceProgress').textContent=Math.round(value*100)+'%'; }});
+    modal.onClose=null; const name=(P.name||'video')+'.mp4';
+    const downloadUrl=URL.createObjectURL(blob);
+    modal(tr('Xuất trên thiết bị'),`<div>✅ ${tr('Xong!')}</div><video controls playsinline src="${downloadUrl}" style="display:block;max-width:100%;max-height:60vh;margin:12px auto"></video><a id="deviceDownload" class="primary" href="${downloadUrl}" download="${esc(name)}">${tr('Tải xuống')}</a>`);
+    modal.onClose=()=>URL.revokeObjectURL(downloadUrl);
+  } catch(e) {
+    modal.onClose=null;
+    if(e.name==='AbortError') {closeModal(); toast(tr('Đã hủy'));}
+    else {
+      modal(tr('Xuất video'),`<div class="err">${esc(deviceError(e))}</div><div class="info">${tr('Xuất bằng server sẽ tải các file cần dùng lên và lưu tạm trong 24 giờ.')}</div><button id="fallbackServer" class="primary">${tr('Xuất bằng server')}</button>`);
+      $('#fallbackServer').onclick=()=>exportServerVideo();
+      console.error(e);
+    }
+  } finally {ui.exportFrames=null; ui.exporting=false; $('#modalClose').disabled=false; document.body.classList.remove('export-busy'); resizeCanvas(); ui.dirty=true;}
+}
+$('#projName').addEventListener('change', e => { commit(); P.name = e.target.value.trim() || tr('Dự án mới'); changed(false); });
 
 function modal(title, html) {
   $('#modalTitle').textContent = title; $('#modalBody').innerHTML = html; $('#modal').classList.remove('hidden');
@@ -1583,22 +1741,22 @@ const closeModal = () => { $('#modal').classList.add('hidden'); modal.onClose?.(
 $('#modalClose').addEventListener('click', closeModal);
 
 async function saveProject() {
-  try { const r = await api('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: P }) }); toast(`Đã lưu "${r.name}"`); }
-  catch (e) { toast('Lỗi lưu: ' + e.message, 4000); }
+  try { const r = await api('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: P }) }); toast(`${tr("Đã lưu \"")}${r.name}"`); }
+  catch (e) { toast(tr('Lỗi lưu: ') + e.message, 4000); }
 }
 async function openProject() {
   try {
     const list = await api('/api/projects');
-    modal('Mở dự án', list.length ? list.map(p => `<div class="proj-item" data-name="${esc(p.name)}"><span>${esc(p.name)}</span><span class="dim">${new Date(p.mtime * 1000).toLocaleString()}</span></div>`).join('') : '<div class="dim">Chưa có dự án nào được lưu.</div>');
-  } catch (e) { toast('Lỗi: ' + e.message); }
+    modal(tr('Mở dự án'), list.length ? list.map(p => `<div class="proj-item" data-name="${esc(p.name)}"><span>${esc(p.name)}</span><span class="dim">${new Date(p.mtime * 1000).toLocaleString(language)}</span></div>`).join('') : `<div class="dim">${tr("Chưa có dự án nào được lưu.")}</div>`);
+  } catch (e) { toast(tr('Lỗi: ') + e.message); }
 }
 $('#modalBody').addEventListener('click', async e => {
   const it = e.target.closest('.proj-item'); if (!it) return;
   try {
     const p = await api('/api/projects/' + encodeURIComponent(it.dataset.name));
-    commit(); P = normalizeProject(p); ui.sel = null; ui.playhead = 0; closeModal(); loadProjectUI(); toast('Đã mở dự án');
+    commit(); P = normalizeProject(p); await restoreDeviceMedia(); ui.sel = null; ui.playhead = 0; closeModal(); loadProjectUI(); toast(tr('Đã mở dự án'));
     pruneMissingMedia();
-  } catch (err) { toast('Lỗi: ' + err.message); }
+  } catch (err) { toast(tr('Lỗi: ') + err.message); }
 });
 function loadProjectUI() {
   if (ui.playing) setPlaying(false);
@@ -1618,22 +1776,42 @@ function exportProject() {
   q.filterMatrix = f ? filterMatrix(f, P.filter.intensity) : null;
   return q;
 }
-async function exportVideo() {
+async function exportServerVideo() {
+  await loadProjectFonts();
+  if(ui.exporting) return;
   if (ui.playing) setPlaying(false);
   const total = totalDuration();
-  if (total <= 0.05) return toast('Timeline đang trống');
+  if (total <= 0.05) return toast(tr('Timeline đang trống'));
+  const q=exportProject(), used=new Set(['main','overlay','audio'].flatMap(track=>q.tracks[track].map(c=>c.mediaId)));
+  q.media=q.media.filter(m=>used.has(m.id));
+  const local=q.media.filter(m=>m.localId);
+  if(local.length) {
+    const controller=new AbortController(); ui.exporting=true;
+    modal(tr('Xuất bằng server'),`<div>${tr('Đang tải file để xuất…')}</div><div id="uploadExportProgress"></div><div class="info">${tr('Xuất bằng server sẽ tải các file cần dùng lên và lưu tạm trong 24 giờ.')}</div><button id="uploadExportCancel">${tr('Hủy')}</button>`);
+    modal.onClose=()=>controller.abort(); $('#uploadExportCancel').onclick=()=>controller.abort();
+    try {
+      for(let i=0;i<local.length;i++) {
+        const m=local[i], uploaded=await DeviceMedia.upload(m,controller.signal,p=>{
+          const el=$('#uploadExportProgress'); if(el)el.textContent=`${i+1}/${local.length} · ${Math.round(p*100)}%`;
+        });
+        q.media[q.media.indexOf(m)]={...uploaded,id:m.id};
+      }
+      q.temporary=true;
+    } catch(e) {if(e.name==='AbortError')toast(tr('Đã hủy'));else toast(deviceError(e),6000);closeModal();return;}
+    finally {ui.exporting=false; modal.onClose=null;}
+  }
   // render từng lớp chữ thành PNG trong suốt -> ffmpeg overlay (giữ đúng phông/hiệu ứng như preview)
   const overlays = (trackHidden('text') ? [] : P.tracks.text).filter(c => c.text.trim()).map(c => {
     const cv = document.createElement('canvas'); cv.width = P.width; cv.height = P.height;
     drawText(cv.getContext('2d'), c, P.width, P.height);
     return { png: cv.toDataURL('image/png'), start: c.start, end: c.start + c.duration };
   });
-  modal('Xuất video', `<div>Đang xuất ${P.width}×${P.height} · ${P.fps}fps · ${fmt(total)}</div>
-    <div class="progress"><div id="expBar"></div></div><div id="expMsg" class="dim">Đang chuẩn bị…</div>
-    <div style="margin-top:12px;text-align:right"><button id="expCancel">Hủy</button></div>`);
+  modal(tr('Xuất video'), `<div>${tr("Đang xuất")} ${P.width}×${P.height} · ${P.fps}fps · ${fmt(total)}</div>
+    <div class="progress"><div id="expBar"></div></div><div id="expMsg" class="dim">${tr("Đang chuẩn bị…")}</div>
+    <div style="margin-top:12px;text-align:right"><button id="expCancel">${tr("Hủy")}</button></div>`);
   let job;
   try {
-    job = await api('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: exportProject(), overlays }) });
+    job = await api('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: q, overlays }) });
   } catch (e) { $('#expMsg').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   let stop = false;
   modal.onClose = () => { stop = true; };
@@ -1643,12 +1821,12 @@ async function exportVideo() {
     let s; try { s = await api('/api/export/' + job.jobId); } catch { continue; }
     const bar = $('#expBar'); if (!bar) break;
     bar.style.width = (s.progress * 100).toFixed(1) + '%';
-    if (s.status === 'running') $('#expMsg').textContent = `Đang xuất… ${(s.progress * 100).toFixed(0)}%`;
+    if (s.status === 'running') $('#expMsg').textContent = `${tr("Đang xuất…")} ${(s.progress * 100).toFixed(0)}%`;
     else if (s.status === 'done') {
-      $('#expMsg').innerHTML = `✅ Xong!<br><span class="dim" style="word-break:break-all">${esc(s.path)}</span>
-        <div style="margin-top:10px"><a href="${s.url}" download><button class="primary">Tải xuống</button></a></div>`;
+      $('#expMsg').innerHTML = `✅ ${tr("Xong!")}<br><span class="dim" style="word-break:break-all">${esc(s.path)}</span>
+        <div style="margin-top:10px"><a href="${s.url}" download><button class="primary">${tr("Tải xuống")}</button></a></div>`;
       $('#expCancel').remove(); break;
-    } else if (s.status === 'cancelled') { $('#expMsg').textContent = 'Đã hủy.'; $('#expCancel').remove(); break; }
+    } else if (s.status === 'cancelled') { $('#expMsg').textContent = tr('Đã hủy.'); $('#expCancel').remove(); break; }
     else if (s.status === 'error') { $('#expMsg').innerHTML = `<div class="err">${esc(s.error)}</div>`; $('#expCancel').remove(); break; }
   }
 }
@@ -1666,11 +1844,12 @@ $('#btnSave').onclick = saveProject;
 $('#btnOpen').onclick = openProject;
 $('#btnExport').onclick = exportVideo;
 $('#btnNew').onclick = () => {
-  if (!confirm('Tạo dự án mới? (Dự án hiện tại nên được Lưu trước)')) return;
+  if (!confirm(tr('Tạo dự án mới? (Dự án hiện tại nên được Lưu trước)'))) return;
   commit(); P = newProject(); ui.sel = null; ui.playhead = 0; loadProjectUI();
 };
 
 document.addEventListener('keydown', e => {
+  if(ui.exporting) {if(e.key==='Escape')modal.onClose?.(); e.preventDefault();return;}
   const tag = e.target.tagName;
   const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && !['range', 'color'].includes(e.target.type)) || tag === 'SELECT';
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
@@ -1733,12 +1912,16 @@ async function boot() {
     const account = await api('/api/account');
     autosaveKey = `vedit.autosave.${account.id}`;
     loadAutosave();
+    await restoreDeviceMedia();
     renderTextPresets();
     loadProjectUI();
     pruneMissingMedia();
     requestAnimationFrame(loop);
   } catch {
-    toast('Đăng nhập Google để sử dụng Vedit miễn phí.', 10000);
+    toast(tr('Đăng nhập Google để sử dụng Vedit miễn phí.'), 10000);
   }
 }
+document.querySelectorAll("[data-language]").forEach(button => button.addEventListener("click", () => setLanguage(button.dataset.language)));
+translateStatic(document.body);
+setLanguage(language);
 boot();

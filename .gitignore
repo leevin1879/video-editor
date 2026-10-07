@@ -11,3 +11,10 @@ __pycache__/
 *.pyc
 *.log
 .env*
+node_modules/
+plugin-env/
+plugins/vedit/.venv/
+plugins/vedit/mcp.json
+
+# Machine-specific private tunnel connection
+/start-chatgpt-tunnel.ps1

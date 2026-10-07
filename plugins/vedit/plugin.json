@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "vedit",
+  "version": "0.1.0",
+  "description": "Edit video in your open VEdit editor using natural language: trim, arrange, add text and sound effects, then export on your device.",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "VEdit",
+        "shortDescription": "Edit video with words",
+        "longDescription": "Control your paired local VEdit timeline and export MP4 on your device. Keep the editor open while using the plugin.",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "defaultPrompt": ["Use VEdit to trim my video and add a title.", "Use VEdit to add a pop sound at 3 seconds."]
+      }
+    }
+  }
+}

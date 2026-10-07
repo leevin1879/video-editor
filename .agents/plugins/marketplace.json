@@ -1,0 +1,10 @@
+{
+  "name": "vedit-local",
+  "interface": {"displayName": "VEdit Local"},
+  "plugins": [{
+    "name": "vedit",
+    "source": {"source": "local", "path": "./plugins/vedit"},
+    "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+    "category": "Productivity"
+  }]
+}

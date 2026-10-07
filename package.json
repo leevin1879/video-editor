@@ -1,0 +1,31 @@
+{
+  "name": "video-editor",
+  "version": "1.0.0",
+  "description": "Ứng dụng chỉnh sửa video chạy trên trình duyệt, máy chủ nhỏ bằng Python (chỉ thư viện chuẩn) và **ffmpeg** để xuất video.",
+  "scripts": {
+    "build": "esbuild browser/media.js --bundle --minify --format=iife --outfile=static/device-media.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leevin1879/video-editor.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/leevin1879/video-editor/issues"
+  },
+  "homepage": "https://github.com/leevin1879/video-editor#readme",
+  "dependencies": {
+    "@fontsource/dongle": "^5.3.0",
+    "@fontsource/jua": "^5.3.0",
+    "@fontsource/nanum-pen-script": "^5.3.0",
+    "@fontsource/noto-sans-kr": "^5.3.0",
+    "mediabunny": "^1.61.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "private": true
+}

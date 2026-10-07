@@ -15,6 +15,8 @@ import time
 import uuid
 import webbrowser
 from contextvars import copy_context
+from temporary_storage import mark_temporary, cleanup_temporary
+from plugin_bridge import BRIDGE
 from tenant_storage import TENANT, TenantPath, TenantJobs, load_config, verified_tenant
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlparse
@@ -67,6 +69,31 @@ def start_job(job_id, job, target, args):
         JOBS[job_id] = job
     context = copy_context()
     threading.Thread(target=context.run, args=(target, *args), daemon=True).start()
+
+
+def run_transcription(job_id, src, cin, cout, language):
+    import tempfile
+    job = JOBS[job_id]
+    try:
+        with tempfile.TemporaryDirectory(prefix='speech-', dir=os.fspath(TMP)) as folder:
+            audio, result = os.path.join(folder, 'audio.wav'), os.path.join(folder, 'result.json')
+            run([FFMPEG, '-v', 'error', '-ss', str(cin), '-t', str(cout-cin), '-i', src,
+                 '-vn', '-ac', '1', '-ar', '16000', '-y', audio])
+            proc = subprocess.Popen([sys.executable, os.path.join(ROOT, 'transcribe.py'), audio, result, language],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
+            job['proc'] = proc
+            _, stderr = proc.communicate(timeout=1800)
+            if proc.returncode:
+                raise ValueError(stderr.decode('utf-8', errors='replace')[-1200:] or 'Speech recognition failed')
+            with open(result, encoding='utf-8') as f:
+                job['result'] = json.load(f)
+            job['status'] = 'done'
+    except Exception as exc:
+        if job.get('proc') and job['proc'].poll() is None:
+            job['proc'].kill(); job['proc'].communicate()
+        job.update(status='error', error=str(exc))
+    finally:
+        job.pop('proc', None)
 
 
 # ----------------------------------------------------------------- helpers
@@ -265,7 +292,20 @@ def build_job(project, overlay_files, out_path, script_path):
             args += ["-ss", f"{cin:.3f}", "-t", f"{src:.3f}", "-i", path]
         tsegs, dur = clip_timing(c, src, m["type"] == "image")
         vf = video_speed_filters(tsegs)
-        if c.get("fit") == "cover":
+        if any(k in c for k in ("x", "y", "scale")):
+            mw, mh = float(m["width"]), float(m["height"])
+            fit_scale = (max if c.get("fit") == "cover" else min)(W / mw, H / mh)
+            factor = fit_scale * num(c, "scale", 1, 0.05, 3)
+            dw, dh = max(2, round(mw * factor / 2) * 2), max(2, round(mh * factor / 2) * 2)
+            cx, cy = num(c, "x", .5, -.5, 1.5) * W, num(c, "y", .5, -.5, 1.5) * H
+            # Place on a padded canvas before cropping, including off-frame clips.
+            left, top = round((cx - dw / 2) / 2) * 2, round((cy - dh / 2) / 2) * 2
+            crop_x, crop_y = max(0, -left), max(0, -top)
+            ox, oy = max(0, left), max(0, top)
+            pw, ph = max(ox + dw, crop_x + W), max(oy + dh, crop_y + H)
+            vf += [f"scale={dw}:{dh}", f"pad={pw}:{ph}:{ox}:{oy}:color=black",
+                   f"crop={W}:{H}:{crop_x}:{crop_y}"]
+        elif c.get("fit") == "cover":
             vf += [f"scale={W}:{H}:force_original_aspect_ratio=increase", f"crop={W}:{H}"]
         else:
             vf += [f"scale={W}:{H}:force_original_aspect_ratio=decrease",
@@ -477,6 +517,9 @@ def run_separate(job_id, src, base, model):
             for mid, path, label, suffix in ((mr_id, mr_path, "MR - beat", "MR"), (vo_id, vo_path, "giọng hát", "giong-hat")):
                 dl_name = f"{base}_{suffix}_{stamp}.mp3"
                 shutil.copyfile(path, os.path.join(EXPORTS, dl_name))
+                if job.get('temporary'):
+                    mark_temporary(path)
+                    mark_temporary(os.path.join(EXPORTS, dl_name))
                 out.append({"id": mid, "name": f"{base} ({label}).mp3", "file": os.path.basename(path),
                             "url": f"/media/{os.path.basename(path)}", "thumb": None,
                             "download": f"/exports/{quote(dl_name)}", "savedPath": os.path.join(EXPORTS, dl_name),
@@ -515,6 +558,8 @@ def run_export(job_id, cmd, total, log_path, job_dir):
                 os.remove(job["out"])
         elif proc.returncode == 0:
             job.update(status="done", progress=1.0)
+            if job.get('temporary'):
+                mark_temporary(job['out'])
         else:
             with open(log_path, encoding="utf-8", errors="replace") as f:
                 tail = f.read()[-1500:]
@@ -628,6 +673,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/account":
                 return self.send_json({"id": TENANT.get() or "local", "free": True})
+            speech = re.fullmatch(r'/api/transcribe/([0-9a-f]+)', path)
+            if speech:
+                job = JOBS.get(speech.group(1))
+                if not job or job.get('kind') != 'transcribe':
+                    return self.send_json({'error': 'Job not found'}, 404)
+                return self.send_json({k:v for k,v in job.items() if k != 'proc'})
             if path in ("/", "/index.html"):
                 return self.send_file(os.path.join(STATIC, "index.html"))
             if path.startswith("/static/"):
@@ -672,8 +723,25 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         try:
+            if path.startswith('/api/plugin/'):
+                return self.handle_plugin(path)
             if path == "/api/upload":
                 return self.handle_upload()
+            if path == '/api/transcribe':
+                body = self.read_json(limit=64*1024)
+                src = media_path({'file':body.get('file')})
+                info = probe(src)
+                if not info.get('hasAudio'):
+                    raise ValueError('Video không có âm thanh')
+                cin, cout = float(body.get('in', 0)), float(body.get('out', info['duration']))
+                if not math.isfinite(cin) or not math.isfinite(cout) or cin < 0 or cout <= cin or cout > info['duration']+.1 or cout-cin > 3600:
+                    raise ValueError('Invalid transcription range (maximum 1 hour)')
+                language = body.get('language', 'auto')
+                if language not in ('auto','ko','vi','en'):
+                    raise ValueError('Unsupported speech language')
+                jid = uuid.uuid4().hex
+                start_job(jid, {'status':'running','kind':'transcribe'}, run_transcription, (jid,src,cin,cout,language))
+                return self.send_json({'job_id':jid})
             if path == "/api/projects":
                 body = self.read_json(limit=5 * 1024 * 1024)
                 proj = body.get("project") or {}
@@ -699,6 +767,42 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(e)}, 400)
         except Exception as e:  # noqa: BLE001
             self.send_json({"error": str(e)}, 500)
+
+    def handle_plugin(self, path):
+        # Single-device bridge only. Never bypass signed tenant authentication.
+        if MULTIUSER:
+            return self.send_json({'error': 'Plugin bridge is only available in local single-user mode'}, 403)
+        if self.headers.get('Host') not in (f'127.0.0.1:{PORT}', f'localhost:{PORT}'):
+            return self.send_json({'error': 'Invalid host'}, 403)
+        origin = self.headers.get('Origin')
+        if origin and origin not in (f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
+            return self.send_json({'error': 'Invalid origin'}, 403)
+        body = self.read_json(limit=1024 * 1024)
+        action = path.rsplit('/', 1)[-1]
+        # A custom header prevents cross-origin form submissions / token creation.
+        if action in ('connect', 'poll', 'complete', 'disconnect'):
+            if self.headers.get('X-Vedit-Editor') != '1':
+                return self.send_json({'error': 'Editor header required'}, 403)
+            client = str(body.get('client', ''))
+            if not re.fullmatch(r'[a-zA-Z0-9-]{8,80}', client):
+                raise ValueError('Invalid editor identifier')
+            if action == 'connect':
+                return self.send_json(BRIDGE.connect(client))
+            if action == 'poll':
+                return self.send_json(BRIDGE.poll(client))
+            if action == 'disconnect':
+                return self.send_json(BRIDGE.disconnect(client))
+            return self.send_json(BRIDGE.complete(client, body.get('id'), body.get('result'), bool(body.get('error'))))
+        token = self.headers.get('Authorization', '').removeprefix('Bearer ')
+        if not BRIDGE.authorize(token):
+            return self.send_json({'error': 'Enable connection in VEdit and provide its pairing key'}, 401)
+        if action == 'command':
+            if body.get('action') not in ('get_project', 'edit_timeline', 'export_video', 'undo'):
+                raise ValueError('Unsupported plugin action')
+            return self.send_json(BRIDGE.enqueue(body['action'], body.get('arguments', {})))
+        if action == 'result':
+            return self.send_json(BRIDGE.result(body.get('id')))
+        self.send_error(404)
 
     def handle_upload(self):
         with UPLOAD_LOCK:
@@ -742,6 +846,10 @@ class Handler(BaseHTTPRequestHandler):
         tpath = os.path.join(THUMBS, mid + ".jpg")
         if make_thumb(dst, tpath, info["type"], info["duration"]):
             thumb = f"/thumbs/{mid}.jpg"
+        if self.headers.get('X-Vedit-Temporary') == '1':
+            mark_temporary(dst)
+            if thumb:
+                mark_temporary(tpath)
         self.send_json({"id": mid, "name": orig, "file": fname, "url": f"/media/{fname}",
                         "thumb": thumb, **info})
 
@@ -753,7 +861,7 @@ class Handler(BaseHTTPRequestHandler):
         base = safe_name(os.path.splitext(str(body.get("name") or "audio"))[0], "audio")
         model = SEP_MODELS.get(str(body.get("quality")), "htdemucs")
         job_id = uuid.uuid4().hex[:12]
-        start_job(job_id, {"id": job_id, "kind": "separate", "status": "running", "progress": 0.0,
+        start_job(job_id, {"id": job_id, "kind": "separate", "temporary": bool(body.get('temporary')), "status": "running", "progress": 0.0,
                           "message": "Đang chuẩn bị…"}, run_separate, (job_id, src, base, model))
         self.send_json({"jobId": job_id})
 
@@ -772,6 +880,9 @@ class Handler(BaseHTTPRequestHandler):
         out_name = f"{base}_am-thanh_{time.strftime('%Y%m%d_%H%M%S')}.mp3"
         out_path = os.path.join(EXPORTS, out_name)
         shutil.copyfile(media_out, out_path)
+        if body.get('temporary'):
+            mark_temporary(media_out)
+            mark_temporary(out_path)
         media = {"id": mid, "name": f"{base} (âm thanh).mp3", "file": media_file, "url": f"/media/{media_file}",
                  "thumb": None, **probe(media_out)}
         self.send_json({"media": media, "file": out_name, "url": f"/exports/{quote(out_name)}", "path": out_path})
@@ -800,7 +911,7 @@ class Handler(BaseHTTPRequestHandler):
             raise
         log_path = os.path.join(EXPORTS, f".{job_id}.log")
         try:
-            start_job(job_id, {"id": job_id, "status": "running", "progress": 0.0, "out": out_path,
+            start_job(job_id, {"id": job_id, "temporary": bool(project.get('temporary')), "status": "running", "progress": 0.0, "out": out_path,
                               "file": out_name, "url": f"/exports/{quote(out_name)}", "total": total},
                       run_export, (job_id, cmd, total, log_path, job_dir))
         except ValueError:
@@ -820,6 +931,15 @@ def main():
         print("!! Không tìm thấy ffmpeg trong PATH. Cài ffmpeg rồi chạy lại.")
         sys.exit(1)
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    def cleanup_loop():
+        while True:
+            try:
+                busy = any(j.get('status') == 'running' for j in list(JOBS.data.values()))
+                cleanup_temporary(WS, busy=busy)
+            except (OSError, RuntimeError):
+                pass
+            time.sleep(600)
+    threading.Thread(target=cleanup_loop, daemon=True).start()
     url = f"http://{HOST}:{PORT}/"
     print(f"Video Editor đang chạy: {url}  (Ctrl+C để tắt)")
     if "--no-browser" not in sys.argv:

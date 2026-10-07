@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+set VEDIT_MULTIUSER=0
 title VEdit - Video Editor (DUNG TAT CUA SO NAY khi dang dung app)
 
 rem App da chay san -> chi mo trinh duyet

@@ -12,6 +12,24 @@ VEDIT_MULTIUSER=0 python server.py
 
 Mở <http://127.0.0.1:8765>. Trên Windows có thể bấm đúp `start.bat`.
 
+## Xử lý trên thiết bị / server
+
+- File mới nhập được đọc tại thiết bị và lưu trong IndexedDB của trình duyệt; không gọi API upload khi nhập. Mở lại trên cùng trình duyệt vẫn dùng được file. Nếu xóa dữ liệu trình duyệt hoặc mở dự án trên thiết bị khác, cần nhập lại file gốc có cùng tên.
+- Trong bảng **Dự án → Nơi xử lý**, chọn Tự động / Xuất trên thiết bị / Xuất bằng server. Mặc định Tự động: máy tính dùng WebCodecs để tạo MP4 H.264 + AAC, điện thoại/iPad dùng server. Giữ tab mở khi xuất trên thiết bị.
+- Bộ dựng trên trình duyệt dùng canvas hiện có cho văn bản, PiP, màu, bộ lọc, ẩn track và fade; âm thanh được trộn với volume, fade, trim và tốc độ. Giữ cao độ khi đổi tốc độ và slow motion nội suy/trộn khung dùng server. Codec không được hỗ trợ hoặc dự án vượt giới hạn bộ nhớ sẽ hiện nút xuất server, không tự gửi file trên máy tính.
+- Xuất server chỉ tải các file local dùng trên timeline; không gửi toàn bộ thư viện. Bản sao upload, thumbnail, bản xuất và các kết quả MP3/MR mới được đánh dấu tạm, hết hạn sau 24 giờ. Server kiểm tra mỗi 10 phút và hoãn xóa khi có tác vụ đang chạy; file cũ không được đánh dấu sẽ giữ nguyên.
+- Tách audio thành track từ video local hoạt động tại thiết bị. Tải MP3 và tách MR vẫn cần server; giao diện báo trước khi gửi file.
+- Hiện giới hạn xuất trình duyệt là 10 phút, khoảng 256 MiB dữ liệu âm thanh giải mã và 256 MiB bản xuất ước tính; các dự án lớn hơn dùng server. Chưa xác nhận trên điện thoại thực tế.
+
+Tạo lại bundle sau khi sửa `browser/media.js`:
+
+```bash
+npm ci
+npm run build
+```
+
+Bundle đã có sẵn trong `static/device-media.js`; chạy Python không cần Node. Mediabunny 1.61.3 dùng giấy phép MPL-2.0, nguồn thư viện có tại <https://www.npmjs.com/package/mediabunny/v/1.61.3> và <https://github.com/Vanilagy/mediabunny>.
+
 ## Tính năng
 
 - **Timeline nhiều track:** Văn bản · Lớp phủ (PiP, tự xếp nhiều hàng) · Video chính (nam châm) · Âm thanh; kéo, cắt mép, tách (S), nhân bản, hoàn tác/làm lại, hít vào điểm khác.
@@ -48,3 +66,27 @@ Mở <http://127.0.0.1:8765>. Trên Windows có thể bấm đúp `start.bat`.
 [MIT](LICENSE) — tự do dùng, sửa, phân phối (kể cả thương mại), chỉ cần giữ thông báo bản quyền.
 Tính năng tách beat dùng [Demucs](https://github.com/facebookresearch/demucs) (MIT); ffmpeg cài riêng theo giấy phép của ffmpeg.
 Người dùng tự chịu trách nhiệm về bản quyền của nội dung (video, bài hát) mà mình chỉnh sửa.
+
+
+### Automatic speech subtitles
+Open Text → Auto subtitles, select the speech language, then Generate subtitles.
+The current main clip (or selected main/overlay/audio clip) is transcribed locally on the VEdit host.
+Install `pip install -r requirements-speech.txt` in the Python environment running server.py.
+Default model: small, CPU int8; set VEDIT_WHISPER_MODEL to a supported model name/path to override.
+The first run may download model weights. No speech recognition API key is required.
+Only the selected audio range of device media is sent to the VEdit host using the existing 24-hour temporary-media policy; the original video stays on the device. Extracted recognition audio/results are removed after processing.
+Generated text clips respect the source trim and speed curve at generation time. Regenerate after changing source timing.
+Transcript edits update the actual subtitle clips; SRT uses project timeline times. TXT contains the current edited transcript.
+Recognition is limited to one hour per request. No-speech clips return a clear message.
+
+## Latest editor features
+
+- Korean is the default interface language; Vietnamese and English are available from the header.
+- Eight bundled sound effects can be previewed and added to the audio timeline.
+- Drag text or video in the preview and resize using corner handles.
+- Select all generated subtitles to adjust their position, size, font and style together.
+- Korean fonts are hosted locally: Noto Sans KR, Jua, Dongle and Nanum Pen Script.
+- Six text styles and text layer controls (up/down/front/back) are available in text properties. Overlapping text clips occupy separate timeline rows.
+- Optional local ChatGPT MCP integration: see [plugin setup](plugins/vedit/README.md).
+
+For an existing production installation, pull `main`, install `requirements-speech.txt` with the Python environment used by the server, and restart the VEdit server when no export job is running. The speech model downloads on first use unless already cached. Static browser assets are committed; Node.js is only required to rebuild them. Keep the existing production authentication and workspace configuration.

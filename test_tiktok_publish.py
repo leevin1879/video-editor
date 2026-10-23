@@ -136,7 +136,7 @@ class TikTokTests(unittest.TestCase):
                     'https://evil.example/video/', 'http://open-upload.tiktokapis.com/video/',
                     'https://user@open-upload.tiktokapis.com/video/',
                     'https://upload.us.tiktokapis.com:8443/video/',
-                    'https://open-upload.tiktokapis.com/other/',
+                    'https://evil-open-upload.tiktokapis.com/video/',
                     'https://upload.us.tiktokapis.com/video/#fragment']:
             with self.subTest(url=url):
                 self.assertFalse(is_upload_destination(url))

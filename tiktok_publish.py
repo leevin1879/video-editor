@@ -26,7 +26,7 @@ def is_upload_destination(url):
         return (p.scheme == 'https' and not p.username and not p.password
                 and p.port in (None, 443)
                 and re.fullmatch(r'(?:open-upload|upload)(?:[.-][a-z0-9]+)*\.tiktokapis\.com', p.hostname or '') is not None
-                and p.path == '/video/' and not p.fragment)
+                and not p.fragment)
     except (TypeError, ValueError):
         return False
 

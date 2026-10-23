@@ -126,6 +126,21 @@ class TikTokTests(unittest.TestCase):
             self.tt.begin_upload('a',self.body)
         self.assertFalse(any(c[0]=='PUT' for c in self.calls))
 
+    def test_regional_upload_destinations(self):
+        from tiktok_publish import is_upload_destination
+        for host in ['open-upload.tiktokapis.com', 'open-upload-sg.tiktokapis.com',
+                     'open-upload-va.tiktokapis.com', 'upload.us.tiktokapis.com']:
+            with self.subTest(host=host):
+                self.assertTrue(is_upload_destination('https://' + host + '/video/?upload_token=test'))
+        for url in ['https://upload.tiktokapis.com.evil.example/video/',
+                    'https://evil.example/video/', 'http://open-upload.tiktokapis.com/video/',
+                    'https://user@open-upload.tiktokapis.com/video/',
+                    'https://upload.us.tiktokapis.com:8443/video/',
+                    'https://open-upload.tiktokapis.com/other/',
+                    'https://upload.us.tiktokapis.com/video/#fragment']:
+            with self.subTest(url=url):
+                self.assertFalse(is_upload_destination(url))
+
     def test_pull_requires_verified_configuration_and_expires(self):
         export=self.root/'export.mp4';export.write_bytes(b'test')
         with self.assertRaises(ValueError):

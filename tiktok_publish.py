@@ -19,6 +19,18 @@ CHUNK = 10_000_000
 BASE = 'https://open.tiktokapis.com/v2/'
 
 
+def is_upload_destination(url):
+    """TikTok can return region-specific upload hosts; never accept user hosts."""
+    try:
+        p = urlsplit(url)
+        return (p.scheme == 'https' and not p.username and not p.password
+                and p.port in (None, 443)
+                and re.fullmatch(r'(?:open-upload|upload)(?:[.-][a-z0-9]+)*\.tiktokapis\.com', p.hostname or '') is not None
+                and p.path == '/video/' and not p.fragment)
+    except (TypeError, ValueError):
+        return False
+
+
 def metadata(body, creator):
     if body.get('consent') is not True:
         raise ValueError('Confirm the TikTok music usage declaration before posting')
@@ -195,8 +207,9 @@ class TikTok(YouTube):
             p = urlsplit(url)
             if not isinstance(publish_id, str) or not 1 <= len(publish_id) <= 64:
                 raise ValueError('TikTok did not return a publish ID; check TikTok before retrying')
-            if source['source'] == 'FILE_UPLOAD' and (p.scheme != 'https' or p.username or p.password or p.port not in (None,443) or not (p.hostname or '').endswith('.tiktokapis.com') or p.hostname not in ('open-upload.tiktokapis.com', 'upload.us.tiktokapis.com', 'upload.tiktokapis.com')):
-                raise ValueError('TikTok returned an unsupported upload destination')
+            if source['source'] == 'FILE_UPLOAD' and not is_upload_destination(url):
+                # Host only: signed URL query parameters must never reach logs/UI.
+                raise ValueError('TikTok returned an unsupported upload destination: ' + (p.hostname or 'missing host'))
             sid = secrets.token_hex(16)
             self.sessions[sid] = {'tenant': tenant, 'request_id': rid, 'fingerprint': fingerprint,
                 'size': size, 'chunk_size': chunk_size, 'chunk_count': count, 'source': source['source'],

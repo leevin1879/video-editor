@@ -1,0 +1,5 @@
+{
+  "client_id": "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com",
+  "client_secret": "YOUR_CLIENT_SECRET",
+  "redirect_uri": "https://vedit.1879.co.kr/api/youtube/callback"
+}

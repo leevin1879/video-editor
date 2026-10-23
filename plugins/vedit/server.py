@@ -23,7 +23,7 @@ WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint
 class Operation(BaseModel):
     model_config = ConfigDict(extra='forbid')
     type: Literal['set_ratio', 'trim', 'set_volume', 'set_speed', 'move', 'reorder',
-                  'remove', 'add_media', 'add_text', 'add_sound_effect']
+                  'remove', 'add_media', 'add_text', 'add_sound_effect', 'set_text_animation', 'set_text_style']
     track: Literal['main', 'overlay', 'audio', 'text'] | None = None
     clip_id: str | None = None
     media_id: str | None = None
@@ -40,6 +40,12 @@ class Operation(BaseModel):
     y: float | None = Field(default=None, ge=0, le=1)
     font_size: float | None = Field(default=None, ge=12, le=300)
     color: str | None = Field(default=None, pattern=r'^#[0-9a-fA-F]{6}$')
+    text_style: Literal['clean','pink','yellow','blue','hand','label','poster_gold','poster_white'] | None = None
+    behind_person: bool | None = None
+    animation: Literal['none', 'slide_up', 'slide_down', 'blur_in', 'slide_from_left', 'slide_from_right'] | None = None
+    animation_duration: float | None = Field(default=None, ge=.05, le=5)
+    fade_in: float | None = Field(default=None, ge=0, le=5)
+    fade_out: float | None = Field(default=None, ge=0, le=5)
     effect_id: Literal['whoosh', 'pop', 'notification', 'success', 'impact', 'click', 'sparkle', 'error'] | None = None
 
 
@@ -93,7 +99,12 @@ async def edit_timeline(operations: list[Operation]) -> dict:
     set_volume: track/clip_id/volume (0–2). set_speed: track/clip_id/speed.
     move: non-main track/clip_id/start. reorder: main track/clip_id/index (zero-based).
     remove: track/clip_id. add_media: media_id/track/start (main appends).
-    add_text: text/start/duration, optional x/y normalized, font_size/color.
+    add_text: text/start/duration, optional x/y normalized, font_size/color and animation fields.
+    set_text_style: track=text/clip_id, optional text_style from get_project and behind_person boolean.
+    Behind-person text uses local person segmentation and requires device export.
+    set_text_animation: track=text/clip_id, animation=none/slide_up/slide_down/blur_in/slide_from_left/slide_from_right,
+    animation_duration (0.05-5 seconds), fade_in/fade_out (0-5 seconds).
+    Omitted fade values reset to zero.
     add_sound_effect: effect_id/start/volume. Unknown IDs or invalid ranges reject the batch.
     """
     if not 1 <= len(operations) <= 50:

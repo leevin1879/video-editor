@@ -6,7 +6,7 @@ const pluginPost = (action, body={}) => api('/api/plugin/'+action,{method:'POST'
 function pluginSummary() {
   return {name:P.name,ratio:P.ratio,width:P.width,height:P.height,fps:P.fps,duration:totalDuration(),
     media:P.media.map(m=>({id:m.id,name:m.name,type:m.type,duration:m.duration,hasAudio:m.hasAudio,missing:!!m.missingLocal})),
-    tracks:structuredClone(P.tracks),sound_effects:SOUND_EFFECTS.map(([id,name])=>({id,name:tr(name)}))};
+    text_styles:TEXT_STYLES.map(s=>({id:s.id,name:tr(s.name)})),behind_person_supported:true,text_animations:TEXT_ANIMATIONS,tracks:structuredClone(P.tracks),sound_effects:SOUND_EFFECTS.map(([id,name])=>({id,name:tr(name)}))};
 }
 function pluginNumber(v,min,max,label) {
   if(typeof v!=='number'||!Number.isFinite(v)||v<min||v>max) throw new Error('Invalid '+label);
@@ -56,6 +56,25 @@ async function pluginEdit(operations) {
         if(o.track!=='main')c.start=pluginNumber(o.start??0,0,86400,'start');
         next.tracks[o.track].push(c);break;
       }
+      case 'set_text_style': {
+        if(o.track!=='text')throw new Error('Text track required');
+        const c=clip(o);
+        if(o.text_style!==undefined){
+          const style=TEXT_STYLES.find(s=>s.id===o.text_style);if(!style)throw new Error('Unknown text style');
+          const {id,name,...values}=style;Object.assign(c,{shadowBlur:0,shadowColor:'#000000'},values,{textStyle:id});
+        }
+        if(o.behind_person!==undefined){if(typeof o.behind_person!=='boolean')throw new Error('Invalid behind_person');c.behindPerson=o.behind_person;}
+        break;
+      }
+      case 'set_text_animation': {
+        if(o.track!=='text')throw new Error('Text track required');
+        const c=clip(o);
+        if(!TEXT_ANIMATIONS.includes(o.animation))throw new Error('Unknown text animation');
+        c.animation=o.animation;
+        c.animationDuration=pluginNumber(o.animation_duration??.5,.05,5,'animation_duration');
+        c.fadeIn=pluginNumber(o.fade_in??0,0,5,'fade_in');
+        c.fadeOut=pluginNumber(o.fade_out??0,0,5,'fade_out');break;
+      }
       case 'add_text': {
         if(typeof o.text!=='string'||!o.text.trim()||o.text.length>2000)throw new Error('Invalid text');
         const c=makeTextClip({text:o.text});c.text=o.text;
@@ -63,6 +82,8 @@ async function pluginEdit(operations) {
         c.x=pluginNumber(o.x??.5,0,1,'x');c.y=pluginNumber(o.y??.86,0,1,'y');
         c.fontSize=pluginNumber(o.font_size??64,12,300,'font_size');
         if(o.color&&!/^#[0-9a-f]{6}$/i.test(o.color))throw new Error('Invalid color');
+        if(o.animation!==undefined){if(!TEXT_ANIMATIONS.includes(o.animation))throw new Error('Unknown text animation');c.animation=o.animation;}
+        c.animationDuration=pluginNumber(o.animation_duration??.5,.05,5,'animation_duration');c.fadeIn=pluginNumber(o.fade_in??0,0,5,'fade_in');c.fadeOut=pluginNumber(o.fade_out??0,0,5,'fade_out');
         c.color=o.color??'#ffffff';c.bold=true;c.strokeWidth=4;next.tracks.text.push(c);break;
       }
       case 'add_sound_effect': {

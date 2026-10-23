@@ -1,0 +1,5 @@
+MediaPipe Tasks Vision 0.10.32, Google LLC, Apache-2.0.
+Source: https://github.com/google-ai-edge/mediapipe
+Package: https://www.npmjs.com/package/@mediapipe/tasks-vision/v/0.10.32
+Selfie segmenter model: https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite
+Model information: https://ai.google.dev/edge/mediapipe/solutions/vision/image_segmenter

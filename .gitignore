@@ -18,3 +18,8 @@ plugins/vedit/mcp.json
 
 # Machine-specific private tunnel connection
 /start-chatgpt-tunnel.ps1
+
+# OAuth client secrets (use an external VEDIT_YOUTUBE_CONFIG file)
+vedit-youtube.json
+client_secret*.json
+vedit-tiktok.json

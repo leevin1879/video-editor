@@ -19,7 +19,10 @@ from temporary_storage import mark_temporary, cleanup_temporary
 from plugin_bridge import BRIDGE
 from tenant_storage import TENANT, TenantPath, TenantJobs, load_config, verified_tenant
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlparse, parse_qs
+from http.cookies import SimpleCookie
+import youtube_publish
+import tiktok_publish
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("VEDIT_PORT", "8765"))
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -45,6 +48,7 @@ NO_WINDOW = 0x08000000 if os.name == "nt" else 0  # không bật cửa sổ cons
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 MIME = {
+    ".wasm": "application/wasm",
     ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
     ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm", ".mkv": "video/x-matroska",
@@ -60,6 +64,8 @@ JOBS_LOCK = threading.Lock()
 UPLOAD_LOCK = threading.Lock()
 MAX_UPLOAD = 500 * 1024 * 1024
 MAX_STORAGE = 2 * 1024 * 1024 * 1024
+YOUTUBE = youtube_publish.YouTube(ROOT, WS, MULTIUSER, AUTH_CONFIG)
+TIKTOK = tiktok_publish.TikTok(ROOT, WS, MULTIUSER, AUTH_CONFIG)
 
 
 def start_job(job_id, job, target, args):
@@ -266,6 +272,8 @@ def audio_speed_graph(inl, outl, segs, keep_pitch, tag):
 
 def build_job(project, overlay_files, out_path, script_path):
     """Dựng lệnh ffmpeg + filter_complex từ JSON dự án. Trả về (cmd, total_seconds)."""
+    if any(c.get('behindPerson') for c in project.get('tracks',{}).get('text',[])):
+        raise ValueError('Behind-person text requires device export')
     W = int(num(project, "width", 1920, 16, 4096)) // 2 * 2
     H = int(num(project, "height", 1080, 16, 4096)) // 2 * 2
     FPS = int(num(project, "fps", 30, 1, 60))
@@ -432,9 +440,32 @@ def build_job(project, overlay_files, out_path, script_path):
         vlabel = "vfx"
 
     for j, ov in enumerate(overlay_files):
-        args += ["-i", ov["path"]]
         s, e = ov["start"], ov["end"]
-        filters.append(f"[{vlabel}][{idx}:v:0]overlay=0:0:enable='between(t,{s:.3f},{e:.3f})'[vo{j}]")
+        duration = max(.001, e-s)
+        args += ["-loop", "1", "-framerate", str(FPS), "-t", str(duration), "-i", ov["path"]]
+        length = min(duration/2, num(ov, "animationDuration", .5, .05, 5))
+        animation = ov.get("animation", "none")
+        fx = ["format=rgba"]
+        if animation == "blur_in":
+            commands = ";".join(f"{k/FPS:.6f} gblur@txt{j} sigma {18*(1-min(1,k/FPS/length))**3:.6f}"
+                                for k in range(int(length*FPS)+2))
+            fx += [f"sendcmd=c='{commands}'", f"gblur@txt{j}=sigma=18"]
+        for name, kind, start in [("fadeIn", "in", 0), ("fadeOut", "out", None)]:
+            fade = min(duration/2, num(ov, name, 0, 0, 5))
+            if fade:
+                at = start if start is not None else duration-fade
+                fx.append(f"fade=t={kind}:st={at:.6f}:d={fade:.6f}:alpha=1")
+        fx.append(f"setpts=PTS+{s:.6f}/TB")
+        filters.append(f"[{idx}:v:0]"+",".join(fx)+f"[txt{j}]")
+        x = "0"
+        y = "0"
+        if animation in ("slide_up", "slide_down"):
+            distance = H*.12*(1 if animation == "slide_up" else -1)
+            y = f"{distance:.6f}*pow(1-min(1,max(0,(t-{s:.6f})/{length:.6f})),3)"
+        if animation in ("slide_from_left", "slide_from_right"):
+            distance = W*.18*(-1 if animation == "slide_from_left" else 1)
+            x = f"{distance:.6f}*pow(1-min(1,max(0,(t-{s:.6f})/{length:.6f})),3)"
+        filters.append(f"[{vlabel}][txt{j}]overlay=x='{x}':y='{y}':eof_action=pass:repeatlast=0:enable='gte(t,{s:.6f})*lt(t,{e:.6f})'[vo{j}]")
         vlabel = f"vo{j}"
         idx += 1
     filters.append(f"[{vlabel}]format=yuv420p[vout]")
@@ -598,11 +629,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *a):  # gọn console
         if "/api/export/" not in self.path:
-            sys.stderr.write("%s %s\n" % (self.command, self.path[:120]))
+            path = urlparse(self.path).path
+            if path.startswith('/api/tiktok/media/'):
+                path = '/api/tiktok/media/[redacted]'
+            sys.stderr.write("%s %s\n" % (self.command, path[:120]))
 
-    def send_json(self, obj, code=200):
+    def send_json(self, obj, code=200, headers=()):
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
+        for name, value in headers:
+            self.send_header(name, value)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
@@ -647,6 +683,8 @@ class Handler(BaseHTTPRequestHandler):
             fn = os.path.basename(path)
             self.send_header("Content-Disposition", f"attachment; filename=\"video.mp4\"; filename*=UTF-8''{quote(fn)}")
         self.end_headers()
+        if self.command == 'HEAD':
+            return
         try:
             with open(path, "rb") as f:
                 f.seek(start)
@@ -665,12 +703,168 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(403)
         self.send_file(p, download)
 
+    def youtube_cookie(self, value, clear=False):
+        secure = '; Secure' if YOUTUBE.config()['redirect_uri'].startswith('https://') else ''
+        age = 0 if clear else 600
+        return f'vedit_youtube_state={value}; Path=/api/youtube; HttpOnly; SameSite=Lax; Max-Age={age}{secure}'
+
+    def handle_youtube_get(self, path):
+        if path == '/api/youtube/status':
+            return self.send_json(YOUTUBE.status(TENANT.get()))
+        if path == '/api/youtube/callback':
+            params = {k:v[0] for k,v in parse_qs(urlparse(self.path).query).items()}
+            cookies = SimpleCookie(self.headers.get('Cookie', ''))
+            browser = cookies.get('vedit_youtube_state')
+            YOUTUBE.callback(TENANT.get(), params, browser.value if browser else '')
+            redirect = urlparse(YOUTUBE.config()['redirect_uri'])
+            origin = redirect.scheme + '://' + redirect.netloc
+            body = ('<!doctype html><meta charset=utf-8><title>YouTube connected</title>'
+                    '<p>YouTube connected. You can close this window.</p><script>'
+                    'if(window.opener){window.opener.postMessage("vedit-youtube-connected",'
+                    + json.dumps(origin) + ');window.close();}else{location.replace("/?youtube=connected");}</script>').encode()
+            self.send_response(200)
+            self.send_header('Content-Type','text/html; charset=utf-8')
+            self.send_header('Content-Length',str(len(body)))
+            self.send_header('Cache-Control','no-store')
+            self.send_header('Referrer-Policy','no-referrer')
+            self.send_header('Set-Cookie',self.youtube_cookie('',True))
+            self.end_headers();self.wfile.write(body)
+            return
+        return self.send_json({'error':'Not found'},404)
+
+    def handle_youtube_post(self, path):
+        if self.headers.get('X-Vedit-YouTube') != '1':
+            return self.send_json({'error':'Use the YouTube controls in VEdit'},403)
+        expected = urlparse(YOUTUBE.config()['redirect_uri'])
+        origin = self.headers.get('Origin')
+        if origin and origin != expected.scheme+'://'+expected.netloc:
+            return self.send_json({'error':'YouTube request origin mismatch'},403)
+        if path == '/api/youtube/chunk':
+            query = parse_qs(urlparse(self.path).query)
+            sid = query.get('id',[''])[0]
+            offset = int(query.get('offset',['-1'])[0])
+            size = int(self.headers.get('Content-Length','0'))
+            if not 0 < size <= youtube_publish.CHUNK:
+                raise ValueError('Invalid YouTube chunk size')
+            YOUTUBE.session(TENANT.get(),sid)
+            data = self.rfile.read(size)
+            if len(data) != size:
+                raise ValueError('Incomplete upload chunk')
+            return self.send_json(YOUTUBE.chunk(TENANT.get(),sid,offset,data))
+        body = self.read_json(limit=32*1024)
+        if path == '/api/youtube/configure':
+            return self.send_json(YOUTUBE.configure_local(body))
+        if path == '/api/youtube/connect':
+            url, cookie = YOUTUBE.connect(TENANT.get())
+            return self.send_json({'url':url},headers=[('Set-Cookie',self.youtube_cookie(cookie))])
+        if path == '/api/youtube/disconnect':
+            YOUTUBE.disconnect(TENANT.get())
+            return self.send_json({'ok':True})
+        if path == '/api/youtube/uploads':
+            return self.send_json(YOUTUBE.begin_upload(TENANT.get(),body))
+        if path == '/api/youtube/upload-status':
+            return self.send_json(YOUTUBE.upload_status(TENANT.get(),str(body.get('id',''))))
+        if path == '/api/youtube/cancel':
+            return self.send_json(YOUTUBE.cancel(TENANT.get(),str(body.get('id',''))))
+        return self.send_json({'error':'Not found'},404)
+
+    def tiktok_cookie(self, value, clear=False):
+        return f'vedit_tiktok_state={value}; Path=/api/tiktok; HttpOnly; SameSite=Lax; Secure; Max-Age={0 if clear else 600}'
+
+    def handle_tiktok_get(self, path):
+        if path == '/api/tiktok/status':
+            return self.send_json(TIKTOK.status(TENANT.get()))
+        if path == '/api/tiktok/creator':
+            return self.send_json(TIKTOK.creator(TENANT.get()))
+        if path == '/api/tiktok/callback':
+            params = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            cookies = SimpleCookie(self.headers.get('Cookie', ''))
+            browser = cookies.get('vedit_tiktok_state')
+            TIKTOK.callback(TENANT.get(), params, browser.value if browser else '')
+            self.send_response(303)
+            self.send_header('Location', '/?tiktok=connected')
+            self.send_header('Set-Cookie', self.tiktok_cookie('', True))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.end_headers()
+            return
+        return self.send_json({'error': 'Not found'}, 404)
+
+    def handle_tiktok_post(self, path):
+        if self.headers.get('X-Vedit-TikTok') != '1':
+            return self.send_json({'error': 'Use the TikTok controls in VEdit'}, 403)
+        c = TIKTOK.config()
+        p = urlparse(c['redirect_uri'])
+        if not c['redirect_uri'] or self.headers.get('Origin') != p.scheme + '://' + p.netloc:
+            return self.send_json({'error': 'Open VEdit at the configured TikTok HTTPS origin'}, 403)
+        if path == '/api/tiktok/chunk':
+            query = parse_qs(urlparse(self.path).query)
+            sid, offset = query.get('id', [''])[0], int(query.get('offset', ['-1'])[0])
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size < tiktok_publish.CHUNK * 2:
+                raise ValueError('Invalid TikTok chunk size')
+            TIKTOK.session(TENANT.get(), sid)
+            data = self.rfile.read(size)
+            if len(data) != size:
+                raise ValueError('Incomplete TikTok upload chunk')
+            return self.send_json(TIKTOK.chunk(TENANT.get(), sid, offset, data))
+        body = self.read_json(limit=32*1024)
+        if path == '/api/tiktok/connect':
+            url, cookie = TIKTOK.connect(TENANT.get())
+            return self.send_json({'url': url}, headers=[('Set-Cookie', self.tiktok_cookie(cookie))])
+        if path == '/api/tiktok/disconnect':
+            TIKTOK.disconnect(TENANT.get())
+            return self.send_json({'ok': True})
+        if path == '/api/tiktok/upload-status':
+            return self.send_json(TIKTOK.upload_status(TENANT.get(), str(body.get('id', ''))))
+        if path == '/api/tiktok/uploads':
+            export_path = None
+            if body.get('export_url'):
+                parsed = urlparse(str(body['export_url']))
+                name = unquote(parsed.path[9:])
+                if parsed.scheme or parsed.netloc or not parsed.path.startswith('/exports/') or parsed.query or parsed.fragment or not name or '/' in name or '\\' in name:
+                    raise ValueError('Select a current VEdit export')
+                export_path = os.path.realpath(os.path.join(EXPORTS, name))
+                if not inside(EXPORTS, export_path) or not os.path.isfile(export_path) or not export_path.lower().endswith('.mp4'):
+                    raise ValueError('Export not found')
+                body['duration'] = probe(export_path)['duration']
+                if os.path.getsize(export_path) != body.get('size'):
+                    raise ValueError('Export size changed')
+            return self.send_json(TIKTOK.begin_upload(TENANT.get(), body, export_path))
+        return self.send_json({'error': 'Not found'}, 404)
+
     # ---------- GET
+    def do_HEAD(self):
+        path = urlparse(self.path).path
+        media = re.fullmatch(r'/api/tiktok/media/([A-Za-z0-9_-]{43})\.mp4', path)
+        target = TIKTOK.media_path(media.group(1)) if media else None
+        public_page = {'/about': 'about.html', '/terms': 'terms.html', '/privacy': 'privacy.html'}.get(path)
+        if public_page:
+            target = os.path.join(STATIC, public_page)
+        if not target:
+            return self.send_error(404)
+        return self.send_file(target)
+
     def do_GET(self):
+        public_page = {'/about': 'about.html', '/terms': 'terms.html', '/privacy': 'privacy.html'}.get(urlparse(self.path).path)
+        if public_page:
+            return self.send_file(os.path.join(STATIC, public_page))
+        # A capability grants access to one already exported video for at most one hour.
+        # No tenant browsing, arbitrary paths, or original media are exposed here.
+        media = re.fullmatch(r'/api/tiktok/media/([A-Za-z0-9_-]{43})\.mp4', urlparse(self.path).path)
+        if media:
+            path = TIKTOK.media_path(media.group(1))
+            if not path:
+                return self.send_error(404)
+            return self.send_file(path)
         if not self.authenticate_storage():
             return
         path = urlparse(self.path).path
         try:
+            if path.startswith('/api/tiktok/'):
+                return self.handle_tiktok_get(path)
+            if path.startswith('/api/youtube/'):
+                return self.handle_youtube_get(path)
             if path == "/api/account":
                 return self.send_json({"id": TENANT.get() or "local", "free": True})
             speech = re.fullmatch(r'/api/transcribe/([0-9a-f]+)', path)
@@ -714,6 +908,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/health":
                 return self.send_json({"ok": True, "ffmpeg": FFMPEG})
             self.send_error(404)
+        except ValueError as e:
+            self.send_json({"error": str(e)}, 400)
         except Exception as e:  # noqa: BLE001
             self.send_json({"error": str(e)}, 500)
 
@@ -723,6 +919,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         try:
+            if path.startswith('/api/tiktok/'):
+                return self.handle_tiktok_post(path)
+            if path.startswith('/api/youtube/'):
+                return self.handle_youtube_post(path)
             if path.startswith('/api/plugin/'):
                 return self.handle_plugin(path)
             if path == "/api/upload":
@@ -901,7 +1101,7 @@ class Handler(BaseHTTPRequestHandler):
             p = os.path.join(job_dir, f"ov{i}.png")
             with open(p, "wb") as f:
                 f.write(base64.b64decode(data.split(",", 1)[1]))
-            overlays.append({"path": p, "start": num(ov, "start", 0, 0), "end": num(ov, "end", 0, 0)})
+            overlays.append({"path": p, "start": num(ov, "start", 0, 0), "end": num(ov, "end", 0, 0), "animation": ov.get("animation", "none"), "animationDuration": num(ov,"animationDuration",.5,.05,5), "fadeIn": num(ov,"fadeIn",0,0,5), "fadeOut": num(ov,"fadeOut",0,0,5)})
         out_name = f"{safe_name(str(project.get('name') or 'video'), 'video')}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
         out_path = os.path.join(EXPORTS, out_name)
         try:

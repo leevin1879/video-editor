@@ -90,3 +90,59 @@ Recognition is limited to one hour per request. No-speech clips return a clear m
 - Optional local ChatGPT MCP integration: see [plugin setup](plugins/vedit/README.md).
 
 For an existing production installation, pull `main`, install `requirements-speech.txt` with the Python environment used by the server, and restart the VEdit server when no export job is running. The speech model downloads on first use unless already cached. Static browser assets are committed; Node.js is only required to rebuild them. Keep the existing production authentication and workspace configuration.
+
+### Text animation
+Select a text clip to choose Slide up, Slide down or Blur to clear and set entrance duration, fade in and fade out. Bulk subtitle selection applies the same settings to all generated subtitles. Motion and fades are limited to half the clip duration. Preview, device export and server export support these effects. In ChatGPT use `set_text_animation` or animation fields on `add_text`; refresh VEdit tools after upgrading the MCP server.
+
+### Poster titles and text behind people
+
+Text styles include glowing gold/white poster titles. Select text and enable **Behind person** to mask text where the prominent person is detected. Uses a locally hosted MediaPipe Selfie Segmenter model; video frames remain in the browser. Preview segmentation is limited to 15 updates/second while playing, and device export segments every frame. Hair, fast motion and groups of people can produce imperfect masks; this is not manual rotoscoping.
+
+Projects with this effect export on the device, including when the project was set to server export. Server export rejects the effect rather than dropping it. Other text styles/animations retain server export support. Model/runtime assets are bundled under `static/vision`; licensing notices are in `static/licenses`. Run `npm run build` after editing the browser modules. Plugin `set_text_style` supports both style selection and `behind_person`; refresh plugin tools after upgrading.
+
+## Upload directly to YouTube
+
+The YouTube button connects a channel and uploads the current exported MP4. After device/server export, click YouTube in the completion dialog, or use the header button. Set title, description, visibility and whether the video is made for kids, review the destination channel, then click Upload. Private is the default. This does not automatically publish a video when exporting or connecting. Editing the project invalidates its previous export for uploading.
+
+### One-time OAuth setup
+
+1. Install `pip install -r requirements-youtube.txt` with the Python environment running VEdit.
+2. Enable **YouTube Data API v3** in your Google Cloud project and create a **Web application** OAuth client. Using a dedicated YouTube OAuth client separates this grant from VEdit login.
+3. Add the exact callback shown in the YouTube setup dialog. Default local callback: `http://127.0.0.1:8765/api/youtube/callback`. Production: `https://vedit.1879.co.kr/api/youtube/callback`. Register every environment you use; HTTPS, hostname, port and path must match exactly.
+4. Local mode: download the Web OAuth client JSON and import it in VEdit's YouTube dialog. The file must already list the callback. The secret is saved outside the repository in `../vedit-youtube.json`; existing configuration is never overwritten through the UI.
+5. Production: copy `deploy/vedit-youtube.example.json` **outside the repository**, fill in real credentials, and point `VEDIT_YOUTUBE_CONFIG` at that file. Alternatively use `VEDIT_YOUTUBE_CLIENT_ID`, `VEDIT_YOUTUBE_CLIENT_SECRET` and `VEDIT_YOUTUBE_REDIRECT_URI`. Keep the existing Google login configuration; it is not changed by this feature.
+6. Configure the OAuth consent screen for YouTube upload + channel read access. In Google's Testing mode, add intended accounts as test users; external production access can require Google's verification. Click Connect YouTube in VEdit, select the intended Google/Brand account and grant the permissions yourself.
+
+Do not commit client JSON, secrets or connection storage. Tokens are encrypted with Fernet under the server-only `workspace/youtube-private` directory, isolated by tenant. Protect that directory with the server account's filesystem permissions and preserve its encryption key when migrating. No access/refresh tokens or Google resumable session URLs are returned to the browser. Disconnect removes VEdit's saved connection; Google account consent can also be revoked at https://myaccount.google.com/permissions.
+
+Uploads use YouTube's resumable protocol with bounded 8 MiB chunks (maximum video size 500 MiB). Device exports pass through VEdit in memory; no additional video file is saved. Server exports are read by the browser using HTTP Range requests. Keep the tab open. Temporary interruptions are retried and progress reconciled with YouTube; recovery after closing the tab/server restart is not supported. After an interrupted final upload, check YouTube Studio before starting another upload to avoid duplicates. Cancelling stops further chunks; a video whose final chunk was already accepted may already exist.
+
+Success displays YouTube's returned video ID/link and actual visibility. Processing can continue on YouTube afterward. Channel availability, API quotas, consent settings and YouTube policies still apply. No real upload has been tested without the owner's channel authorization.
+
+Validation: `python -m unittest test_youtube_publish test_plugin_bridge test_temporary_storage` and `node scripts/test_youtube_ui.cjs`. These use mocked Google responses and do not publish videos.
+
+## YouTube + TikTok publishing
+
+The **YouTube + TikTok** header button uses one current export for the destinations explicitly selected by the user. It displays the connected channel/account, a preview, editable metadata and separate visibility settings. YouTube defaults to private and requires an audience answer. TikTok has no default visibility or enabled interactions; its creator info is queried when the dialog opens and again before submission. Commercial content, branded-content consent and AI disclosure are supported. Submission sends both jobs concurrently. Each result is independent; TikTok is only reported published after `PUBLISH_COMPLETE`, not after the upload finishes. Send remains disabled after a submission to prevent accidental duplicates. A pending TikTok session can be checked again in the same browser tab.
+
+### TikTok setup and current registration
+
+An app named **VEdit**, owned by the **VEdit** organization, was created on 2026-10-23:
+
+- App: `7699694429230024722`, [developer draft](https://developers.tiktok.com/app/7699694429230024722/pending).
+- Sandbox: `VEdit Development`, `7699696923690747912`.
+- The app's Production registration is still **Draft / not approved**. The Sandbox configuration was saved with its icon, Photo & Video category, Web platform, Login Kit and Direct Post. Its `vedit.1879.co.kr` domain is verified, and the target TikTok account `1879aischool` is connected to the HTTPS VEdit installation. YouTube is also connected there. Public `/about`, `/terms` and `/privacy` pages are deployed. Sandbox credentials remain outside the repository. A real posting demo and TikTok review/audit are still required for general public posting; do not treat the Sandbox grant as Production approval.
+
+Required setup:
+
+1. Deploy this version, including `deploy/vedit-authproxy.py`, to the HTTPS installation. Verify `/about`, `/terms`, `/privacy` load publicly without Google login. These pages identify the operator supplied by the owner. Review their text before using them for the production service.
+2. Complete the app icon, Photo & Video category, description and official URLs. Add Login Kit and Content Posting API, enable Direct Post, and request `user.info.basic` and `video.publish`. Register the exact Web callback `https://vedit.1879.co.kr/api/tiktok/callback`. TikTok Web does not accept the local HTTP callback used by YouTube.
+3. Add and verify the website/domain in URL properties. For server exports also verify the URL prefix `https://vedit.1879.co.kr/api/tiktok/media/` or its domain. The backend provides only opaque, unguessable one-hour URLs for a single approved export; original media and workspace listing stay private. The proxy only forwards exact capability GETs without login. Do not disable authentication on `/media`, `/exports`, other `/api` routes, or the editor.
+4. Add the intended TikTok target account in the Sandbox, complete the sandbox configuration, and obtain the Sandbox credentials. Keep Sandbox and Production credentials separate.
+5. Copy `deploy/vedit-tiktok.example.json` **outside the repository** to the default `../vedit-tiktok.json`, or set `VEDIT_TIKTOK_CONFIG` to its path. Set the actual client key/secret and callback. Environment overrides: `VEDIT_TIKTOK_CLIENT_KEY`, `VEDIT_TIKTOK_CLIENT_SECRET`, `VEDIT_TIKTOK_REDIRECT_URI`. Leave `pull_enabled` false until domain/prefix verification and the authenticated proxy have been deployed and checked. Never commit credentials.
+6. Use VEdit at the configured HTTPS origin, click Connect TikTok and grant the requested permissions. The proxy forwards only the matching OAuth anti-CSRF cookie; Google login/session cookies never reach the publisher backend. Tokens are encrypted separately under `workspace/tiktok-private`, isolated by tenant. Disconnect revokes TikTok access and removes its local connection and active capabilities.
+7. Record a real sandbox end-to-end demo, then complete app review and the Direct Post audit. Unaudited clients are limited to private accounts/`SELF_ONLY`; public posting depends on TikTok approval. Do not submit a demo claiming untested functionality or use unrelated existing videos as an integration demo.
+
+Device exports use `FILE_UPLOAD` with sequential 10,000,000-byte chunks and trailing bytes merged into the last chunk. Server exports use `PULL_FROM_URL` on the verified domain. VEdit limits videos to 500 MiB. Keep the browser open during transfer. A manual status check remains available after the initial polling window; processing and moderation can take longer. Connections persist across restarts, but active publishing jobs/capability URLs are currently held in memory and are lost on a server restart. Check the platform before retrying interrupted jobs; successful posts are not rolled back when another destination fails. The app never automatically changes account privacy, retries a completed destination, or adds a VEdit watermark.
+
+Validation: `python -m unittest test_publish_proxy test_tiktok_publish test_youtube_publish test_plugin_bridge test_temporary_storage`, `python -m unittest test_tenant_isolation`, `node scripts/test_social_publish_ui.cjs`, `node scripts/test_youtube_ui.cjs`. These tests use isolated data and mock publishing services. Live OAuth callbacks and creator/channel queries were verified for both platforms on 2026-10-23; unauthenticated requests to account/media/export routes remain denied. No real TikTok or simultaneous posting test has been performed, and no new video was posted during connection setup.

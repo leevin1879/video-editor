@@ -1,0 +1,6 @@
+{
+  "client_key": "REPLACE_WITH_TIKTOK_CLIENT_KEY",
+  "client_secret": "REPLACE_WITH_TIKTOK_CLIENT_SECRET",
+  "redirect_uri": "https://vedit.1879.co.kr/api/tiktok/callback",
+  "pull_enabled": false
+}

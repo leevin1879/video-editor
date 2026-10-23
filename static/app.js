@@ -46,10 +46,12 @@ function commit() {
   hist.redo.length = 0;
 }
 function undo() {
+  ui.editing = false;
   if (!hist.undo.length) return;
   hist.redo.push(JSON.stringify(P)); P = JSON.parse(hist.undo.pop()); changed(true);
 }
 function redo() {
+  ui.editing = false;
   if (!hist.redo.length) return;
   hist.undo.push(JSON.stringify(P)); P = JSON.parse(hist.redo.pop()); changed(true);
 }
@@ -320,6 +322,8 @@ const TEXT_PRESETS = [
   { label: 'Viền đỏ', text: 'Wow', color: '#ffffff', strokeWidth: 8, strokeColor: '#e0123c', bold: true, fontSize: 120 },
 ];
 const TEXT_STYLES = [
+  {id:'poster_gold',name:'Tiêu đề vàng phát sáng',font:'Noto Sans KR',color:'#ffdf22',bold:true,strokeWidth:2,strokeColor:'#ffdf22',bg:false,bgColor:'#000000aa',shadowBlur:24,shadowColor:'#ffd000'},
+  {id:'poster_white',name:'Tiêu đề trắng phát sáng',font:'Noto Sans KR',color:'#ffffff',bold:true,strokeWidth:2,strokeColor:'#ffffff',bg:false,bgColor:'#000000aa',shadowBlur:18,shadowColor:'#ffffff'},
   {id:'clean',name:'Rõ nét',font:'Noto Sans KR',color:'#ffffff',bold:true,strokeWidth:4,strokeColor:'#000000',bg:false,bgColor:'#000000aa'},
   {id:'pink',name:'Hồng dễ thương',font:'Jua',color:'#ffb6dc',bold:false,strokeWidth:5,strokeColor:'#701b53',bg:false,bgColor:'#000000aa'},
   {id:'yellow',name:'Vàng nổi bật',font:'Jua',color:'#ffe14d',bold:false,strokeWidth:6,strokeColor:'#151515',bg:false,bgColor:'#000000aa'},
@@ -663,14 +667,28 @@ function drawFit(src, sw, sh, fit, c) {
   mainPreview={track:'main',c,box:b};
 }
 
-function drawText(g, c, W, H) {
+const TEXT_ANIMATIONS = ['none','slide_up','slide_down','blur_in','slide_from_left','slide_from_right'];
+function textAnimation(c, time) {
+  const local=Math.max(0,time-c.start), duration=Math.max(.001,c.duration);
+  const length=Math.min(duration/2,Math.max(.05,c.animationDuration??.5));
+  const progress=clamp(local/length,0,1), ease=1-Math.pow(1-progress,3);
+  return {alpha:fadeFactor(local,duration,Math.min(duration/2,c.fadeIn||0),Math.min(duration/2,c.fadeOut||0)),
+    dx:c.animation==='slide_from_left'?-(1-ease)*.18:c.animation==='slide_from_right'?(1-ease)*.18:0,
+    dy:c.animation==='slide_up'?(1-ease)*.12:c.animation==='slide_down'?-(1-ease)*.12:0,
+    blur:c.animation==='blur_in'?(1-ease)*18:0};
+}
+function drawText(g, c, W, H, time=null) {
   const lines = String(c.text || '').split('\n');
   const fs = c.fontSize || 60, lh = fs * 1.25;
   g.save();
+  const motion=time===null?{alpha:1,dx:0,dy:0,blur:0}:textAnimation(c,time);
+  g.globalAlpha*=motion.alpha;
+  g.shadowBlur=clamp(c.shadowBlur||0,0,40);g.shadowColor=c.shadowColor||'#000000';
+  if(motion.blur)g.filter=`blur(${motion.blur}px)`;
   g.font = `${c.bold ? 700 : 400} ${fs}px "${c.font || 'Arial'}", sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
   const bw = Math.max(0, ...lines.map(l => g.measureText(l).width)), bh = lh * lines.length;
-  const cx = c.x * W, cy = c.y * H;
+  const cx = (c.x+motion.dx) * W, cy = (c.y+motion.dy) * H;
   if (c.bg) {
     const px = fs * 0.35, py = fs * 0.18;
     g.fillStyle = c.bgColor || '#000000aa';
@@ -704,6 +722,13 @@ function overlayBox(c, sw, sh, W, H) { // kích thước = khung "vừa khung" *
   const mw = m?.width || sw, mh = m?.height || sh;
   const s0 = Math.min(W / mw, H / mh) * (c.scale ?? 0.4);
   return { cx: c.x * W, cy: c.y * H, w: mw * s0, h: mh * s0, rot: (c.rotation || 0) * Math.PI / 180 };
+}
+const behindTextCanvas=document.createElement('canvas');
+let personMaskLoading=false,personMaskFailed=false;
+function preparePersonMask(){
+  if(PersonMask.isReady()||personMaskLoading||personMaskFailed)return;
+  personMaskLoading=true;toast(tr('Đang chuẩn bị tách người…'),4000);
+  PersonMask.ready().then(()=>{ui.dirty=true;}).catch(e=>{personMaskFailed=true;toast(tr('Không tách được người. Thử tải lại trang.'),6000);}).finally(()=>{personMaskLoading=false;});
 }
 function render(t) {
   const W = canvas.width, H = canvas.height;
@@ -740,8 +765,23 @@ function render(t) {
   }
   applyGlobalFilter(W, H);
   textBoxes.length = 0;
-  for (const c of trackHidden('text') ? [] : P.tracks.text) {
-    if (t >= c.start && t < c.start + c.duration) textBoxes.push({ c, box: drawText(ctx, c, W, H) });
+  const activeTexts=(trackHidden('text')?[]:P.tracks.text).filter(c=>t>=c.start&&t<c.start+c.duration);
+  let personMask=null;
+  if(activeTexts.some(c=>c.behindPerson)){
+    if(!PersonMask.isReady())preparePersonMask();
+    else {
+      try{personMask=PersonMask.generate(canvas,ui.playing&&!ui.exporting?Math.floor(t*15)+':'+W+':'+H:Symbol());}
+      catch(e){if(ui.exporting)throw e;personMaskFailed=true;toast(tr('Không tách được người. Thử tải lại trang.'),6000);}
+    }
+  }
+  for(const c of activeTexts){
+    if(c.behindPerson){
+      if(!personMask)continue;
+      behindTextCanvas.width=W;behindTextCanvas.height=H;
+      const layer=behindTextCanvas.getContext('2d'),box=drawText(layer,c,W,H,t);
+      layer.globalCompositeOperation='destination-out';layer.drawImage(personMask,0,0,W,H);
+      ctx.drawImage(behindTextCanvas,0,0);textBoxes.push({c,box});
+    }else textBoxes.push({c,box:drawText(ctx,c,W,H,t)});
   }
   const selected=ui.subtitleGroup?previewTargets().find(o=>o.track==='text'&&o.c.subtitleSource):previewTargets().find(o=>o.track===ui.sel?.track&&o.c.id===ui.sel?.id);
   if(selected&&!ui.playing&&!ui.exporting) {
@@ -1551,6 +1591,12 @@ function renderProps() {
       <div class="group-title">${tr('Lớp chữ')}</div>
       <div class="text-layer-actions"><button data-text-layer="up">↑ ${tr('Lớp trên')}</button><button data-text-layer="down">↓ ${tr('Lớp dưới')}</button><button data-text-layer="front">⇈ ${tr('Trên cùng')}</button><button data-text-layer="back">⇊ ${tr('Dưới cùng')}</button></div>
       ${textStyleButtons(c)}
+      <div class="seg" style="margin-bottom:12px"><button data-toggle="behindPerson" class="${c.behindPerson?'on':''}">${tr('Sau người')}</button></div>
+      ${c.behindPerson?`<div class="info">${tr('Tách người tự động · Xuất trên thiết bị')}</div>`:''}
+      <div class="group-title">${tr('Hiệu ứng chữ')}</div>
+      ${field('animation',tr('Chuyển động'),`<select data-k="animation">${TEXT_ANIMATIONS.map((id,i)=>`<option value="${id}" ${(c.animation||'none')===id?'selected':''}>${tr(['Không','Trượt lên','Trượt xuống','Mờ nhòe đến rõ','Từ trái sang phải','Từ phải sang trái'][i])}</option>`).join('')}</select>`)}
+      ${field('animationDuration',tr('Thời gian hiệu ứng (s)'),num('animationDuration',.05,5,.05,c.animationDuration??.5))}
+      <div class="row">${field('fadeIn',tr('Mờ vào (s)'),num('fadeIn',0,5,.1,c.fadeIn||0))}${field('fadeOut',tr('Mờ ra (s)'),num('fadeOut',0,5,.1,c.fadeOut||0))}</div>
       <div class="row">${field('font', tr('Phông'), `<select data-k="font">${FONTS.map(f => `<option ${c.font === f ? 'selected' : ''}>${f}</option>`).join('')}</select>`)}
         ${field('color', tr('Màu'), `<input type="color" data-k="color" value="${c.color}">`)}</div>
       ${field('fontSize', tr('Cỡ chữ'), range('fontSize', 16, 300, 1, c.fontSize), c.fontSize)}
@@ -1585,9 +1631,9 @@ function applyProp(k, raw) {
   }
   const { track } = ui.sel; const c = findClip(track, ui.sel.id); if (!c) return;
   const m = c.mediaId ? mediaById(c.mediaId) : null;
-  const v = typeof c[k] === 'string' || ['text', 'font', 'color', 'strokeColor', 'bgColor'].includes(k) ? raw : +raw;
+  const v = typeof c[k] === 'string' || ['text', 'font', 'color', 'strokeColor', 'bgColor','animation'].includes(k) ? raw : +raw;
   if (typeof v === 'number' && !Number.isFinite(v)) return;
-  if(ui.subtitleGroup&&track==='text'&&c.subtitleSource&&['font','fontSize','color','strokeWidth','strokeColor','bgColor','x','y'].includes(k)){
+  if(ui.subtitleGroup&&track==='text'&&c.subtitleSource&&['font','fontSize','color','strokeWidth','strokeColor','bgColor','x','y','animation','animationDuration','fadeIn','fadeOut'].includes(k)){
     for(const cue of P.tracks.text.filter(c=>c.subtitleSource))cue[k]=k==='bgColor'?raw+'cc':v;
     return;
   }
@@ -1644,7 +1690,7 @@ $('#props').addEventListener('click', e => {
     const style=TEXT_STYLES.find(p=>p.id===b.dataset.textStyle);if(!style||ui.sel.track!=='text')return;
     const {id,name,...values}=style;
     const targets=ui.subtitleGroup&&c.subtitleSource?P.tracks.text.filter(c=>c.subtitleSource):[c];
-    commit();targets.forEach(clip=>Object.assign(clip,values,{textStyle:id}));changed();return;
+    commit();targets.forEach(clip=>Object.assign(clip,{shadowBlur:0,shadowColor:'#000000'},values,{textStyle:id}));changed();return;
   }
   if (b.dataset.act === 'detach') return detachAudio(c);
   if (b.dataset.act === 'mp3') return extractMp3(mediaById(c.mediaId));
@@ -1703,11 +1749,13 @@ async function loadProjectFonts(){
 }
 document.fonts.addEventListener('loadingdone',()=>{ui.dirty=true;});
 async function exportVideo() {
+  const youtubeVersion=JSON.stringify(P);
   await loadProjectFonts();
+  if(P.tracks.text.some(c=>c.behindPerson)&&!trackHidden('text')){try{await PersonMask.ready();}catch(e){toast(tr('Không tách được người. Thử tải lại trang.'),6000);return;}}
   if(ui.exporting) return;
   if(uploading.size) return toast(tr('Đang đọc file trên thiết bị…'));
   const phone=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.maxTouchPoints>1&&/Macintosh/i.test(navigator.userAgent));
-  if(exportMode==='server'||(exportMode==='auto'&&phone)) return exportServerVideo();
+  if((exportMode==='server'||(exportMode==='auto'&&phone))&&!P.tracks.text.some(c=>c.behindPerson)) return exportServerVideo();
   const total=totalDuration(); if(total<=0.05)return toast(tr('Timeline đang trống'));
   setPlaying(false); const controller=new AbortController(); ui.exporting=true;
   modal(tr('Xuất trên thiết bị'),`<div>${tr('Đang xuất trên thiết bị…')}</div><div class="progress"><div id="deviceBar"></div></div>
@@ -1719,8 +1767,10 @@ async function exportVideo() {
       signal:controller.signal,renderFrame:(time,sources)=>{ui.exportFrames=sources;render(time);},
       progress:value=>{ $('#deviceBar').style.width=(value*100).toFixed(1)+'%'; $('#deviceProgress').textContent=Math.round(value*100)+'%'; }});
     modal.onClose=null; const name=(P.name||'video')+'.mp4';
+    window.YouTubePublish?.setExport({blob,name,version:youtubeVersion});
     const downloadUrl=URL.createObjectURL(blob);
-    modal(tr('Xuất trên thiết bị'),`<div>✅ ${tr('Xong!')}</div><video controls playsinline src="${downloadUrl}" style="display:block;max-width:100%;max-height:60vh;margin:12px auto"></video><a id="deviceDownload" class="primary" href="${downloadUrl}" download="${esc(name)}">${tr('Tải xuống')}</a>`);
+    modal(tr('Xuất trên thiết bị'),`<div>✅ ${tr('Xong!')}</div><video controls playsinline src="${downloadUrl}" style="display:block;max-width:100%;max-height:60vh;margin:12px auto"></video><a id="deviceDownload" class="primary" href="${downloadUrl}" download="${esc(name)}">${tr('Tải xuống')}</a><button id="exportToYouTube" style="margin-left:8px">YouTube</button>`);
+    $('#exportToYouTube').onclick=()=>$('#btnYouTube').click();
     modal.onClose=()=>URL.revokeObjectURL(downloadUrl);
   } catch(e) {
     modal.onClose=null;
@@ -1777,6 +1827,9 @@ function exportProject() {
   return q;
 }
 async function exportServerVideo() {
+  const youtubeVersion=JSON.stringify(P);
+  if(!trackHidden('text')&&P.tracks.text.some(c=>c.behindPerson)){toast(tr('Chữ sau người cần xuất trên thiết bị.'),6000);return;}
+
   await loadProjectFonts();
   if(ui.exporting) return;
   if (ui.playing) setPlaying(false);
@@ -1804,7 +1857,7 @@ async function exportServerVideo() {
   const overlays = (trackHidden('text') ? [] : P.tracks.text).filter(c => c.text.trim()).map(c => {
     const cv = document.createElement('canvas'); cv.width = P.width; cv.height = P.height;
     drawText(cv.getContext('2d'), c, P.width, P.height);
-    return { png: cv.toDataURL('image/png'), start: c.start, end: c.start + c.duration };
+    return { png: cv.toDataURL('image/png'), start: c.start, end: c.start + c.duration, animation:c.animation||'none', animationDuration:c.animationDuration??.5, fadeIn:c.fadeIn||0, fadeOut:c.fadeOut||0 };
   });
   modal(tr('Xuất video'), `<div>${tr("Đang xuất")} ${P.width}×${P.height} · ${P.fps}fps · ${fmt(total)}</div>
     <div class="progress"><div id="expBar"></div></div><div id="expMsg" class="dim">${tr("Đang chuẩn bị…")}</div>
@@ -1823,8 +1876,10 @@ async function exportServerVideo() {
     bar.style.width = (s.progress * 100).toFixed(1) + '%';
     if (s.status === 'running') $('#expMsg').textContent = `${tr("Đang xuất…")} ${(s.progress * 100).toFixed(0)}%`;
     else if (s.status === 'done') {
+      window.YouTubePublish?.setExport({url:s.url,name:(P.name||'video')+'.mp4',version:youtubeVersion});
       $('#expMsg').innerHTML = `✅ ${tr("Xong!")}<br><span class="dim" style="word-break:break-all">${esc(s.path)}</span>
-        <div style="margin-top:10px"><a href="${s.url}" download><button class="primary">${tr("Tải xuống")}</button></a></div>`;
+        <div style="margin-top:10px"><a href="${s.url}" download><button class="primary">${tr("Tải xuống")}</button></a><button id="exportToYouTube">YouTube</button></div>`;
+      $('#exportToYouTube').onclick=()=>$('#btnYouTube').click();
       $('#expCancel').remove(); break;
     } else if (s.status === 'cancelled') { $('#expMsg').textContent = tr('Đã hủy.'); $('#expCancel').remove(); break; }
     else if (s.status === 'error') { $('#expMsg').innerHTML = `<div class="err">${esc(s.error)}</div>`; $('#expCancel').remove(); break; }

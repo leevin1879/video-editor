@@ -5,6 +5,7 @@ import hmac
 import http.client
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -16,7 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CFG_PATH = os.environ.get("VEDIT_AUTH_CFG", os.path.join(HERE, "vedit-auth.json"))
-CFG = json.load(open(CFG_PATH, encoding="utf-8"))
+with open(CFG_PATH, encoding="utf-8") as config_stream:
+    CFG = json.load(config_stream)
 if not CFG.get("session_secret"):
     CFG["session_secret"] = secrets.token_hex(32)
     json.dump(CFG, open(CFG_PATH, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
@@ -214,12 +216,22 @@ class Proxy(BaseHTTPRequestHandler):
         return True
 
     def _handle(self):
-        if not self._authenticate():
+        public_media = self.command in ('GET', 'HEAD') and re.fullmatch(r'/api/tiktok/media/[A-Za-z0-9_-]{43}\.mp4', self.path) is not None
+        public_page = self.command in ('GET', 'HEAD') and self.path in ('/about', '/terms', '/privacy')
+        public_request = public_media or public_page
+        if not public_request and not self._authenticate():
             return
         if UP_PORT == 8765 and not GOOGLE:
             return self._deny(503, "Vedit requires verified Google login.")
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
-        if UP_PORT == 8765:
+        # Forward only publisher anti-CSRF cookies; never forward the Google session.
+        publisher = next((name for name in ('youtube', 'tiktok') if self.path.startswith('/api/' + name + '/')), None)
+        if publisher:
+            cookies = SimpleCookie(self.headers.get('Cookie', ''))
+            key = 'vedit_' + publisher + '_state'
+            if key in cookies:
+                headers['Cookie'] = cookies[key].OutputString()
+        if UP_PORT == 8765 and not public_request:
             email = self._session_email()
             tenant = hashlib.sha256(email.strip().lower().encode()).hexdigest()
             stamp = str(int(time.time()))

@@ -134,6 +134,5 @@ window.addEventListener('message',event=>{
   if(event.origin===location.origin&&event.source===youtubePopup&&event.data==='vedit-youtube-connected')showYouTube();
 });
 window.addEventListener('beforeunload',event=>{if(youtubeUploading){event.preventDefault();event.returnValue='';}});
-$('#btnYouTube').onclick=showYouTube;
 
 if(new URLSearchParams(location.search).get('youtube')==='connected'){history.replaceState(null,'',location.pathname);showYouTube();}

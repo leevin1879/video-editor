@@ -1769,8 +1769,8 @@ async function exportVideo() {
     modal.onClose=null; const name=(P.name||'video')+'.mp4';
     window.YouTubePublish?.setExport({blob,name,version:youtubeVersion});
     const downloadUrl=URL.createObjectURL(blob);
-    modal(tr('Xuất trên thiết bị'),`<div>✅ ${tr('Xong!')}</div><video controls playsinline src="${downloadUrl}" style="display:block;max-width:100%;max-height:60vh;margin:12px auto"></video><a id="deviceDownload" class="primary" href="${downloadUrl}" download="${esc(name)}">${tr('Tải xuống')}</a><button id="exportToYouTube" style="margin-left:8px">YouTube</button>`);
-    $('#exportToYouTube').onclick=()=>$('#btnYouTube').click();
+    modal(tr('Xuất trên thiết bị'),`<div>✅ ${tr('Xong!')}</div><video controls playsinline src="${downloadUrl}" style="display:block;max-width:100%;max-height:60vh;margin:12px auto"></video><a id="deviceDownload" class="primary" href="${downloadUrl}" download="${esc(name)}">${tr('Tải xuống')}</a><button id="exportToPublish" style="margin-left:8px">YouTube + TikTok</button>`);
+    $('#exportToPublish').onclick=()=>$('#btnPublish').click();
     modal.onClose=()=>URL.revokeObjectURL(downloadUrl);
   } catch(e) {
     modal.onClose=null;
@@ -1878,8 +1878,8 @@ async function exportServerVideo() {
     else if (s.status === 'done') {
       window.YouTubePublish?.setExport({url:s.url,name:(P.name||'video')+'.mp4',version:youtubeVersion});
       $('#expMsg').innerHTML = `✅ ${tr("Xong!")}<br><span class="dim" style="word-break:break-all">${esc(s.path)}</span>
-        <div style="margin-top:10px"><a href="${s.url}" download><button class="primary">${tr("Tải xuống")}</button></a><button id="exportToYouTube">YouTube</button></div>`;
-      $('#exportToYouTube').onclick=()=>$('#btnYouTube').click();
+        <div style="margin-top:10px"><a href="${s.url}" download><button class="primary">${tr("Tải xuống")}</button></a><button id="exportToPublish">YouTube + TikTok</button></div>`;
+      $('#exportToPublish').onclick=()=>$('#btnPublish').click();
       $('#expCancel').remove(); break;
     } else if (s.status === 'cancelled') { $('#expMsg').textContent = tr('Đã hủy.'); $('#expCancel').remove(); break; }
     else if (s.status === 'error') { $('#expMsg').innerHTML = `<div class="err">${esc(s.error)}</div>`; $('#expCancel').remove(); break; }
